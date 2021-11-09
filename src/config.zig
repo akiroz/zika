@@ -47,13 +47,13 @@ const ServerConfig = struct {
     pool_end: []const u8,
 };
 
-const ClientTunnel = struct {
+pub const ClientTunnel = struct {
+    id_length: u8 = 4,
     topic: []const u8,
     bind_addr: []const u8,
 };
 
 const ClientConfig = struct {
-    id_length: u8 = 4,
     tunnels: []ClientTunnel,
 };
 

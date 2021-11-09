@@ -45,10 +45,13 @@
   },
 
   "client": {
-    "// In bytes (Optional, default shown, must match server)": "",
-    "id_length": 4,
     "tunnels": [
-      { "topic": "zika/OjFcZWEAGy2E3Vkh", "bind_addr": "172.20.0.2" }
+      {
+        "topic": "zika/OjFcZWEAGy2E3Vkh",
+        "bind_addr": "172.20.0.2",
+        "// In bytes (Optional, default shown, must match server)": "",
+        "id_length": 4
+      }
     ]
   }
 }

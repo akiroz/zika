@@ -61,19 +61,22 @@ fn PcapDriver(comptime T: type) type {
             errdefer Pcap.pcap_close(self.pcap);
 
             const filter_spec = try std.fmt.allocPrint(alloc, "ip and not dst host {s}", .{conf.driver.local_addr});
+            defer alloc.free(filter_spec);
+            
             const filter_cstr = try std.cstr.addNullByte(alloc, filter_spec);
+            defer alloc.free(filter_cstr);
+            
             var filter: Pcap.bpf_program = undefined;
             if(Pcap.pcap_compile(self.pcap, &filter, filter_cstr, 1, Pcap.PCAP_NETMASK_UNKNOWN) < 0) {
                 std.log.err("pcap_compile: {s}", .{Pcap.pcap_geterr(self.pcap)});
                 return Error.CompileFilterFailed;
             }
-            errdefer Pcap.pcap_freecode(&filter);
+            defer Pcap.pcap_freecode(&filter);
             
             if(Pcap.pcap_setfilter(self.pcap, &filter) < 0) {
                 std.log.err("pcap_setfilter: {s}", .{Pcap.pcap_geterr(self.pcap)});
                 return Error.SetFilterFailed;
             }
-            Pcap.pcap_freecode(&filter);
 
             self.recv_thread = try std.Thread.spawn(loop, self);
             std.log.info("Driver: pcap", .{});
@@ -170,7 +173,7 @@ fn TunDriver(comptime T: type) type {
     };
 }
 
-const IpHeader = packed struct {
+pub const IpHeader = packed struct {
     ihl: u4,
     ver: u4,
     tos: u8,
@@ -192,7 +195,7 @@ const PseudoHeader = packed struct {
     len: u16,
 };
 
-pub fn Tunnel(comptime T: type) type {
+pub fn NetInterface(comptime T: type) type {
     const Driver = if (builtin.target.isDarwin()) PcapDriver else TunDriver;
 
     return struct {

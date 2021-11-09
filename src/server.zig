@@ -10,7 +10,8 @@ const Allocator = std.mem.Allocator;
 const Ip4Address = std.net.Ip4Address;
 const Base64UrlEncoder = std.base64.url_safe_no_pad.Encoder;
 const Config = config.Config;
-const Tunnel = driver.Tunnel;
+const NetInterface = driver.NetInterface;
+const IpHeader = driver.IpHeader;
 
 pub const Server = struct {
     const Self = @This();
@@ -25,7 +26,7 @@ pub const Server = struct {
     pool_end: Ip4Address,
     id_cache: IdCache,
     ip_cache: IpCache,
-    tunnel: Tunnel(*Self),
+    ifce: NetInterface(*Self),
 
     pub fn init(alloc: *Allocator, conf: * const Config) !*Self {
         const server_conf = conf.server orelse {
@@ -47,7 +48,7 @@ pub const Server = struct {
         std.log.info("Topic: {s}", .{server_conf.topic});
         std.log.info("Max Tunnels: {d} (rounded to 2^n)", .{self.max_tunnels});
         std.log.info("IP Pool: {s} - {s}", .{server_conf.pool_start, server_conf.pool_end});
-        self.tunnel = try Tunnel(*Self).init(alloc, conf, self, @ptrCast(driver.PacketHandler(*Self), &recv));
+        self.ifce = try NetInterface(*Self).init(alloc, conf, self, @ptrCast(driver.PacketHandler(*Self), &recv));
         std.log.info("==================================================", .{});
 
         return self;

@@ -5,8 +5,55 @@ const config = @import("config.zig");
 
 const Allocator = std.mem.Allocator;
 const Ip4Address = std.net.Ip4Address;
+const Base64UrlEncoder = std.base64.url_safe_no_pad.Encoder;
 const Config = config.Config;
-const Tunnel = driver.Tunnel;
+const NetInterface = driver.NetInterface;
+const IpHeader = driver.IpHeader;
+
+pub const Tunnel = struct {
+    const Self = @This();
+    const Conf = config.ClientTunnel;
+
+    conf: Conf,
+    id: []u8,
+    topic: []u8,
+    bind_addr: u32,
+    
+    pub fn create(alloc: *Allocator, conf: Conf) !*Self {
+        const self = try alloc.create(Self);
+        errdefer alloc.destroy(self);
+
+        self.conf = conf;
+        
+        const ip = try Ip4Address.parse(conf.bind_addr, 0);
+        self.bind_addr = ip.sa.addr;
+        
+        self.id = try alloc.alloc(u8, conf.id_length);
+        errdefer alloc.free(self.id);
+        std.crypto.random.bytes(self.id);
+        
+        const b64_len = Base64UrlEncoder.calcSize(conf.id_length);
+        const b64_id = try alloc.alloc(u8, b64_len);
+        defer alloc.free(b64_id);
+        _ = Base64UrlEncoder.encode(b64_id, self.id);
+        
+        self.topic = try std.fmt.allocPrint(alloc, "{s}/{s}", .{conf.topic, b64_id});
+        errdefer alloc.free(self.topic);
+
+        std.log.info("Tunnel: {s} -> {s} ({s})", .{conf.bind_addr, conf.topic, b64_id});
+        return self;
+    }
+
+    pub fn handle_local(self: *Self, pkt: []u8) !bool {
+        const hdr = @ptrCast(*IpHeader, pkt);
+        if(hdr.dst != self.bind_addr) return false;
+        // handle packet
+        return true;
+    }
+
+    pub fn handle_remote(self: *Self, pkt: []u8) !*Self {
+    }
+};
 
 pub const Client = struct {
     const Self = @This();
@@ -14,8 +61,8 @@ pub const Client = struct {
         ConfigMissing
     };
     
-    bind_addr: u32,
-    tunnel: Tunnel(*Self),
+    ifce: NetInterface(*Self),
+    tunnels: []*Tunnel,
 
     pub fn init(alloc: *Allocator, conf: * const Config) !*Self {
         const client_conf = conf.client orelse {
@@ -26,24 +73,30 @@ pub const Client = struct {
         const self = try alloc.create(Self);
         errdefer alloc.destroy(self);
 
-        std.log.info("== Tunnel Config =================================", .{});
-        std.log.info("ID Length: {d}", .{client_conf.id_length});
-        for (client_conf.tunnels) |t| {
-            const ip = try Ip4Address.parse(t.bind_addr, 0);
-            self.bind_addr = ip.sa.addr;
-            std.log.info("Bind: {s} to {s}", .{t.bind_addr, t.topic});
+        self.tunnels = try alloc.alloc(*Tunnel, client_conf.tunnels.len);
+        errdefer alloc.free(self.tunnels);
+
+        std.log.info("== Client Config =================================", .{});
+        for (client_conf.tunnels) |tunnel, idx| {
+            self.tunnels[idx] = try Tunnel.create(alloc, .{
+                .id_length = tunnel.id_length,
+                .topic = tunnel.topic,
+                .bind_addr = tunnel.bind_addr,
+            });
         }
-        self.tunnel = try Tunnel(*Self).init(alloc, conf, self, @ptrCast(driver.PacketHandler(*Self), &recv));
+        self.ifce = try NetInterface(*Self).init(alloc, conf, self, @ptrCast(driver.PacketHandler(*Self), &recv));
         std.log.info("==================================================", .{});
 
         return self;
     }
 
     fn recv(self: *Self, pkt: []u8) void {
-        std.log.info("got pkt {d}", .{pkt.len});
-        self.tunnel.write(self.bind_addr, pkt) catch |err| {
-            std.log.info("write failed: {s}", .{err});
-        };
+        for (self.tunnels) |tunnel| {
+            const handled = tunnel.handle_local(pkt) catch |err| {
+                std.log.warn("handle_local: {s}", .{err});
+            };
+            if(handled) break;
+        }
     }
 
 };

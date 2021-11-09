@@ -12,6 +12,6 @@ pub fn build(b: *Builder) void {
         server.linkSystemLibrary("pcap");
         client.linkSystemLibrary("pcap");
     }
-    server.install();
+    //server.install();
     client.install();
 }
