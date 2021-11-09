@@ -1,0 +1,12 @@
+zig-cache/
+zig-out/
+/release/
+/debug/
+/build/
+/build-*/
+/docgen_tmp/
+
+.DS_Store
+zika_config.json
+*.so
+*.dylib

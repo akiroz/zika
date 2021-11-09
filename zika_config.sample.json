@@ -1,0 +1,54 @@
+{
+  "mqtt": {
+    "options": {
+      "// Optional MQTT Auth": "",
+      "username": "",
+      "password": "",
+
+      "// Optional TLS": "",
+      "ca": "ca.pem",
+      "auth_server": true,
+      "key": "key.pem",
+      "cert": "cert.pem",
+
+      "// Unit: seconds (int), Optonal: defaults shown": "",
+      "connect_timeout": 30,
+      "keep_alive_interval": 60,
+      "reconnect_interval_min": 1,
+      "reconnect_interval_max": 60
+    },
+
+    "// Config can be overwritten on broker level": "",
+    "brokers": [
+      { "url": "mqtt://localhost:1883" },
+      { "url": "mqtt://localhost:1883", "options": { "password": "foo" } }
+    ]
+  },
+  
+  "driver": {
+    "local_addr": "172.20.0.1",
+    "pcap": { "interface": "lo0" },
+    "tun": { "netmask": "255.255.255.0" }
+  },
+
+  "// NOTE: Tunnel ID and MQTT topic are prepended to all IP packets": "",
+  "// Long IDs / topics will add significant overhead to traffic with many small packets": "",
+
+  "server": {
+    "// In bytes (Optional, default shown, must match client)": "",
+    "id_length": 4,
+    "topic": "zika/OjFcZWEAGy2E3Vkh",
+    "// Optional, default shown": "",
+    "max_tunnels": 16,
+    "pool_start": "172.20.0.100",
+    "pool_end": "172.20.0.200"
+  },
+
+  "client": {
+    "// In bytes (Optional, default shown, must match server)": "",
+    "id_length": 4,
+    "tunnels": [
+      { "topic": "zika/OjFcZWEAGy2E3Vkh", "bind_addr": "172.20.0.2" }
+    ]
+  }
+}
