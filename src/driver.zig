@@ -212,7 +212,7 @@ pub fn NetInterface(comptime T: type) type {
             };
         }
 
-        pub fn write(self: *Self, src: u32, pkt: []u8) !void {
+        pub fn inject(self: *Self, src: u32, pkt: []u8) !void {
             const hdr = @ptrCast(*IpHeader, pkt);
             const payload_offset = hdr.ihl * 4;
             hdr.src = src;

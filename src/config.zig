@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const MqttOptions = struct {
+pub const MqttOptions = struct {
     connect_timeout: u32 = 30,
     keep_alive_interval: u32 = 60,
     reconnect_interval_min: u32 = 1,
