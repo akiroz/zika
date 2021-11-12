@@ -1,23 +1,23 @@
 const std = @import("std");
 
 pub const MqttOptions = struct {
-    connect_timeout: u32 = 30,
-    keep_alive_interval: u32 = 60,
-    reconnect_interval_min: u32 = 1,
-    reconnect_interval_max: u32 = 60,
+    keepalive_interval: u16 = 60,
+    reconnect_interval_min: u16 = 1,
+    reconnect_interval_max: u16 = 60,
 
     username: ?[]const u8 = null,
     password: ?[]const u8 = null,
 
     ca: ?[]const u8 = null,
-    auth_server: bool = true,
+    tls_insecure: bool = false,
     key: ?[]const u8 = null,
     cert: ?[]const u8 = null,
 };
 
 const MqttBroker = struct {
     options: ?MqttOptions = null,
-    url: []const u8,
+    host: []const u8,
+    port: u16,
 };
 
 const MqttConfig = struct {

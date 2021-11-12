@@ -7,21 +7,20 @@
 
       "// Optional TLS": "",
       "ca": "ca.pem",
-      "auth_server": true,
       "key": "key.pem",
       "cert": "cert.pem",
+      "tls_insecure": false,
 
       "// Unit: seconds (int), Optonal: defaults shown": "",
-      "connect_timeout": 30,
-      "keep_alive_interval": 60,
+      "keepalive_interval": 60,
       "reconnect_interval_min": 1,
       "reconnect_interval_max": 60
     },
 
     "// Config can be overwritten on broker level": "",
     "brokers": [
-      { "url": "mqtt://localhost:1883" },
-      { "url": "mqtt://localhost:1883", "options": { "password": "foo" } }
+      { "host": "localhost", "port": 1883 },
+      { "host": "localhost", "port": 1883, "options": { "keepalive_interval": 30 } }
     ]
   },
   
