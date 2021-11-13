@@ -17,9 +17,10 @@ pub fn Tunnel(comptime T: type) type {
         const Conf = config.ClientTunnel;
 
         conf: Conf,
-        id: []u8,
-        topic: []u8,
         bind_addr: u32,
+        id: []u8,
+        up_topic_cstr: []u8,
+        dn_topic_cstr: []u8,
         
         ifce: *NetInterface(T),
         mqtt: *Mqtt(T),
@@ -44,8 +45,11 @@ pub fn Tunnel(comptime T: type) type {
             defer alloc.free(b64_id);
             _ = Base64UrlEncoder.encode(b64_id, self.id);
 
-            self.topic = try std.fmt.allocPrint(alloc, "{s}/{s}", .{conf.topic, b64_id});
-            errdefer alloc.free(self.topic);
+            const up_topic = try std.fmt.allocPrint(alloc, "{s}/{s}", .{conf.topic, b64_id});
+            defer alloc.free(up_topic);
+            self.up_topic_cstr = try std.cstr.addNullByte(alloc, up_topic);
+            self.dn_topic_cstr = try std.cstr.addNullByte(alloc, conf.topic);
+            try self.mqtt.subscribe(self.dn_topic_cstr);
 
             std.log.info("Tunnel: {s} -> {s} ({s})", .{conf.bind_addr, conf.topic, b64_id});
             return self;
@@ -54,7 +58,7 @@ pub fn Tunnel(comptime T: type) type {
         pub fn up(self: *Self, pkt: []u8) !bool {
             const hdr = @ptrCast(*IpHeader, pkt);
             if(hdr.dst != self.bind_addr) return false;
-            try self.mqtt.send(self.topic, pkt);
+            try self.mqtt.send(self.up_topic_cstr, pkt);
             return true;
         }
 
@@ -99,6 +103,7 @@ pub const Client = struct {
                 .bind_addr = tunnel.bind_addr,
             });
         }
+        try self.mqtt.connect();
         std.log.info("==================================================", .{});
 
         return self;
