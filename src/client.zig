@@ -4,6 +4,7 @@ const driver = @import("driver.zig");
 const config = @import("config.zig");
 
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const Ip4Address = std.net.Ip4Address;
 const Base64UrlEncoder = std.base64.url_safe_no_pad.Encoder;
 const Config = config.Config;
@@ -27,26 +28,18 @@ pub fn Tunnel(comptime T: type) type {
 
         pub fn create(alloc: *Allocator, ifce: *NetInterface(T), broker: *Mqtt(T), conf: Conf) !*Self {
             const self = try alloc.create(Self);
-            errdefer alloc.destroy(self);
-
             self.conf = conf;
             self.ifce = ifce;
             self.mqtt = broker;
-
-            const ip = try Ip4Address.parse(conf.bind_addr, 0);
-            self.bind_addr = ip.sa.addr;
-
             self.id = try alloc.alloc(u8, conf.id_length);
-            errdefer alloc.free(self.id);
-            std.crypto.random.bytes(self.id);
+            self.bind_addr = (try Ip4Address.parse(conf.bind_addr, 0)).sa.addr;
 
+            std.crypto.random.bytes(self.id);
             const b64_len = Base64UrlEncoder.calcSize(conf.id_length);
             const b64_id = try alloc.alloc(u8, b64_len);
-            defer alloc.free(b64_id);
             _ = Base64UrlEncoder.encode(b64_id, self.id);
 
             const up_topic = try std.fmt.allocPrint(alloc, "{s}/{s}", .{conf.topic, b64_id});
-            defer alloc.free(up_topic);
             self.up_topic_cstr = try std.cstr.addNullByte(alloc, up_topic);
             self.dn_topic_cstr = try std.cstr.addNullByte(alloc, conf.topic);
             try self.mqtt.subscribe(self.dn_topic_cstr);
@@ -77,8 +70,9 @@ pub const Client = struct {
         ConfigMissing
     };
     
-    ifce: NetInterface(*Self),
-    mqtt: *Mqtt(*Self),
+    arena: ArenaAllocator,
+    ifce: ?*NetInterface(*Self),
+    mqtt: ?*Mqtt(*Self),
     tunnels: []*Tunnel(*Self),
 
     pub fn init(alloc: *Allocator, conf: * const Config) !*Self {
@@ -87,26 +81,41 @@ pub const Client = struct {
             return Error.ConfigMissing;
         };
 
-        const self = try alloc.create(Self);
-        errdefer alloc.destroy(self);
-
-        self.tunnels = try alloc.alloc(*Tunnel(*Self), client_conf.tunnels.len);
-        errdefer alloc.free(self.tunnels);
+        var arena = ArenaAllocator.init(alloc);
+        const self = try arena.allocator.create(Self);
+        self.arena = arena;
+        errdefer self.deinit();
 
         std.log.info("== Client Config =================================", .{});
-        self.ifce = try NetInterface(*Self).init(alloc, conf, self, @ptrCast(driver.PacketHandler(*Self), &up));
-        self.mqtt = try Mqtt(*Self).init(alloc, conf, self, @ptrCast(mqtt.PacketHandler(*Self), &down));
+        self.ifce = try NetInterface(*Self).init(&arena.allocator, conf, self, @ptrCast(driver.PacketHandler(*Self), &up));
+        self.mqtt = try Mqtt(*Self).init(&arena.allocator, conf, self, @ptrCast(mqtt.PacketHandler(*Self), &down));
+        self.tunnels = try alloc.alloc(*Tunnel(*Self), client_conf.tunnels.len);
         for (client_conf.tunnels) |tunnel, idx| {
-            self.tunnels[idx] = try Tunnel(*Self).create(alloc, &self.ifce, self.mqtt, .{
-                .id_length = tunnel.id_length,
-                .topic = tunnel.topic,
-                .bind_addr = tunnel.bind_addr,
-            });
+            self.tunnels[idx] = try Tunnel(*Self).create(
+                &arena.allocator,
+                self.ifce orelse unreachable,
+                self.mqtt orelse unreachable,
+                .{
+                    .id_length = tunnel.id_length,
+                    .topic = tunnel.topic,
+                    .bind_addr = tunnel.bind_addr,
+                }
+            );
         }
-        try self.mqtt.connect();
         std.log.info("==================================================", .{});
 
         return self;
+    }
+
+    pub fn deinit(self: *Self) void {
+        if(self.mqtt) |m| m.deinit();
+        if(self.ifce) |i| i.deinit();
+        self.arena.deinit();
+    }
+
+    pub fn run(self: *Self) !void {
+        if(self.mqtt) |m| try m.connect();
+        if(self.ifce) |i| try i.run();
     }
 
     fn up(self: *Self, pkt: []u8) void {
@@ -132,9 +141,10 @@ pub const Client = struct {
 };
 
 pub fn main() !void {
-    const alloc = std.heap.c_allocator;
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const alloc = &gpa.allocator;
     const conf_path = try std.fs.cwd().realpathAlloc(alloc, "zika_config.json");
     const conf = try config.get(conf_path);
     const client = try Client.init(alloc, &conf);
-    while (true) std.time.sleep(10_000_000_000);
+    try client.run();
 }

@@ -9,6 +9,7 @@ const Net = @cImport({
 const Pcap = @cImport(@cInclude("pcap/pcap.h"));
 
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const Ip4Address = std.net.Ip4Address;
 pub fn PacketHandler(comptime T: type) type {
     return *const fn(T, []const u8) void;
@@ -25,12 +26,12 @@ fn PcapDriver(comptime T: type) type {
             SetFilterFailed,
             InjectFailed,
             ReadFailed,
+            NotInitialized,
         };
 
         user: T,
         handler: PacketHandler(T),
-        pcap: *Pcap.pcap_t,
-        recv_thread: *std.Thread,
+        pcap: ?*Pcap.pcap_t,
 
         pub fn init(alloc: *Allocator, conf: *const Config, user: T, handler: PacketHandler(T)) !*Self {
             const pcap_conf = conf.driver.pcap orelse {
@@ -38,56 +39,57 @@ fn PcapDriver(comptime T: type) type {
                 return Error.ConfigMissing;
             };
 
-            const interface = try std.cstr.addNullByte(alloc, pcap_conf.interface);
-            var pcap_err = std.mem.zeroes([Pcap.PCAP_ERRBUF_SIZE]u8);
-            
             const self = try alloc.create(Self);
-            errdefer alloc.destroy(self);
-            
             self.user = user;
             self.handler = handler;
-            self.pcap = Pcap.pcap_create(interface, @ptrCast([*c]u8, &pcap_err)) orelse {
+            
+            const interface = try std.cstr.addNullByte(alloc, pcap_conf.interface);
+            var pcap_err = std.mem.zeroes([Pcap.PCAP_ERRBUF_SIZE]u8);
+            const pcap = Pcap.pcap_create(interface, @ptrCast([*c]u8, &pcap_err)) orelse {
                 std.log.err("pcap_create: {s}", .{pcap_err});
                 return Error.CreateFailed;
             };
+            self.pcap = pcap;
+            errdefer self.deinit();
             
-            
-            _ = Pcap.pcap_set_promisc(self.pcap, 1);
-            _ = Pcap.pcap_set_immediate_mode(self.pcap, 1);
-            if(Pcap.pcap_activate(self.pcap) < 0) {
-                std.log.err("pcap_activate: {s}", .{Pcap.pcap_geterr(self.pcap)});
+            _ = Pcap.pcap_set_promisc(pcap, 1);
+            _ = Pcap.pcap_set_immediate_mode(pcap, 1);
+            if(Pcap.pcap_activate(pcap) < 0) {
+                std.log.err("pcap_activate: {s}", .{Pcap.pcap_geterr(pcap)});
                 return Error.ActivateFailed;
             }
-            errdefer Pcap.pcap_close(self.pcap);
 
             const filter_spec = try std.fmt.allocPrint(alloc, "ip and not dst host {s}", .{conf.driver.local_addr});
-            defer alloc.free(filter_spec);
-            
             const filter_cstr = try std.cstr.addNullByte(alloc, filter_spec);
-            defer alloc.free(filter_cstr);
-            
             var filter: Pcap.bpf_program = undefined;
-            if(Pcap.pcap_compile(self.pcap, &filter, filter_cstr, 1, Pcap.PCAP_NETMASK_UNKNOWN) < 0) {
-                std.log.err("pcap_compile: {s}", .{Pcap.pcap_geterr(self.pcap)});
+            if(Pcap.pcap_compile(pcap, &filter, filter_cstr, 1, Pcap.PCAP_NETMASK_UNKNOWN) < 0) {
+                std.log.err("pcap_compile: {s}", .{Pcap.pcap_geterr(pcap)});
                 return Error.CompileFilterFailed;
             }
             defer Pcap.pcap_freecode(&filter);
             
-            if(Pcap.pcap_setfilter(self.pcap, &filter) < 0) {
-                std.log.err("pcap_setfilter: {s}", .{Pcap.pcap_geterr(self.pcap)});
+            if(Pcap.pcap_setfilter(pcap, &filter) < 0) {
+                std.log.err("pcap_setfilter: {s}", .{Pcap.pcap_geterr(pcap)});
                 return Error.SetFilterFailed;
             }
 
-            self.recv_thread = try std.Thread.spawn(loop, self);
             std.log.info("Driver: pcap", .{});
             return self;
         }
 
-        fn loop(self: *Self) !void {
-            if(Pcap.pcap_loop(self.pcap, -1, recv, @intToPtr([*c]u8, @ptrToInt(self))) == Pcap.PCAP_ERROR) {
-                std.log.err("pcap_loop: {s}", .{Pcap.pcap_geterr(self.pcap)});
+        pub fn deinit(self: *Self) void {
+            if(self.pcap) |pcap| Pcap.pcap_close(pcap);
+        }
+
+        pub fn run(self: *Self) !void {
+            if(self.pcap) |pcap| {
+                if(Pcap.pcap_loop(pcap, -1, recv, @intToPtr([*c]u8, @ptrToInt(self))) == Pcap.PCAP_ERROR) {
+                    std.log.err("pcap_loop: {s}", .{Pcap.pcap_geterr(pcap)});
+                    return Error.ReadFailed;
+                }
+            } else {
+                return Error.NotInitialized;
             }
-            return Error.ReadFailed;
         }
 
         fn recv(self_ptr: [*c]u8, hdr: [*c]const Pcap.pcap_pkthdr, pkt: [*c]const u8) callconv(.C) void {
@@ -96,9 +98,13 @@ fn PcapDriver(comptime T: type) type {
         }
 
         pub fn write(self: *Self, pkt: []u8) !void {
-            if(Pcap.pcap_inject(self.pcap, @ptrCast([*c]u8, pkt), pkt.len) == Pcap.PCAP_ERROR) {
-                std.log.err("pcap_inject: {s}", .{Pcap.pcap_geterr(self.pcap)});
-                return Error.InjectFailed;
+            if(self.pcap) |pcap| {
+                if(Pcap.pcap_inject(pcap, @ptrCast([*c]u8, pkt), pkt.len) == Pcap.PCAP_ERROR) {
+                    std.log.err("pcap_inject: {s}", .{Pcap.pcap_geterr(pcap)});
+                    return Error.InjectFailed;
+                }
+            } else {
+                return Error.NotInitialized;
             }
         }
 
@@ -106,7 +112,6 @@ fn PcapDriver(comptime T: type) type {
 }
 
 fn TunDriver(comptime T: type) type {
-
     return struct {
         const Self = @This();
         const Error = error {
@@ -114,9 +119,9 @@ fn TunDriver(comptime T: type) type {
             IoctlFailed,
         };
 
-        tun: std.fs.File,
         user: T,
         handler: PacketHandler(T),
+        tun: ?std.fs.File = null,
 
         pub fn init(alloc: *Allocator, conf: * const Config, user: T, handler: PacketHandler(T)) !*Self {
             const tun_conf = conf.driver.tun orelse {
@@ -127,12 +132,10 @@ fn TunDriver(comptime T: type) type {
             const mask = try Ip4Address.parse(tun_conf.netmask, 0);
 
             const self = try alloc.create(Self);
-            errdefer alloc.destroy(self);
-
             self.user = user;
             self.handler = handler;
             self.tun = try std.fs.openFileAbsolute("/dev/net/tun", .{ .read = true, .write = true });
-            errdefer self.tun.close();
+            errdefer self.deinit();
 
             var err = 0;      
             const ifreq = std.mem.zeroes(std.c.ifreq);
@@ -164,6 +167,14 @@ fn TunDriver(comptime T: type) type {
 
             std.log.info("Driver: tun", .{});
             return self;
+        }
+
+        pub fn deinit(self: *Self) void {
+            if(self.tun) |tun| tun.close();
+        }
+
+        pub fn run(self: *Self) !void {
+
         }
 
         pub fn write(self: *Self, pkt: []u8) !void {
@@ -200,16 +211,29 @@ pub fn NetInterface(comptime T: type) type {
 
     return struct {
         const Self = @This();
-        driver: *Driver(T),
-        local_ip: u32,
         
-        pub fn init(alloc: *Allocator, conf: * const Config, user: T, handler: PacketHandler(T)) !Self {
-            const ip = try Ip4Address.parse(conf.driver.local_addr, 0);
+        arena: ArenaAllocator,
+        local_ip: u32,
+        driver: ?*Driver(T) = null,
+        
+        pub fn init(alloc: *Allocator, conf: * const Config, user: T, handler: PacketHandler(T)) !*Self {
+            var arena = ArenaAllocator.init(alloc);
+            const self = try arena.allocator.create(Self);
+            self.arena = arena;
+            errdefer self.deinit();
+            self.local_ip = (try Ip4Address.parse(conf.driver.local_addr, 0)).sa.addr;
+            self.driver = try Driver(T).init(alloc, conf, user, handler);
             std.log.info("Local IP: {s}", .{conf.driver.local_addr});
-            return Self {
-                .driver = try Driver(T).init(alloc, conf, user, handler),
-                .local_ip = ip.sa.addr,
-            };
+            return self;
+        }
+
+        pub fn deinit(self: *Self) void {
+            if(self.driver) |drv| drv.deinit();
+            self.arena.deinit();
+        }
+
+        pub fn run(self: *Self) !void {
+            if(self.driver) |drv| try drv.run();
         }
 
         pub fn inject(self: *Self, src: u32, pkt: []u8) !void {
@@ -237,7 +261,7 @@ pub fn NetInterface(comptime T: type) type {
                 },
                 else => {}, // No special handling
             }
-            try self.driver.write(pkt);
+            if(self.driver) |drv| try drv.write(pkt);
         }
 
         fn cksum(buf: []u8, carry: u32) u16 {

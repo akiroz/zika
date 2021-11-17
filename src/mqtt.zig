@@ -7,6 +7,7 @@ const Mosq = @cImport({
 });
 
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const Config = config.Config;
 
 pub fn PacketHandler(comptime T: type) type {
@@ -33,19 +34,16 @@ pub fn Client(comptime T: type) type {
 
         pub fn init(alloc: *Allocator, host: []const u8, port: u16, opts: Opts, user: T, handler: PacketHandler(T)) !*Self {
             const self = try alloc.create(Self);
-            errdefer alloc.destroy(self);
-
+            self.host_cstr = try std.cstr.addNullByte(alloc, host);
+            self.port = port;
+            self.keepalive = opts.keepalive_interval;
+            self.subscribtions = std.ArrayList([]u8).init(alloc);
             self.user = user;
             self.handler = handler;
-            self.subscribtions = std.ArrayList([]u8).init(alloc);
-            self.keepalive = opts.keepalive_interval;
-            self.port = port;
-            self.host_cstr = try std.cstr.addNullByte(alloc, host);
-            errdefer alloc.free(self.host_cstr);
-
             self.mosq = Mosq.mosquitto_new(null, true, self) orelse {
                 return Error.CreateFailed;
             };
+            errdefer self.deinit();
 
             var rc = Mosq.mosquitto_reconnect_delay_set(self.mosq, opts.reconnect_interval_min, opts.reconnect_interval_max, true);
             if(rc != Mosq.MOSQ_ERR_SUCCESS) {
@@ -55,12 +53,7 @@ pub fn Client(comptime T: type) type {
 
             if(opts.username) |username| {
                 const username_str = try std.cstr.addNullByte(alloc, username);
-                errdefer alloc.free(username_str);
-                const password_str: [*c]const u8 = if(opts.password) |password| blk: {
-                    const str = try std.cstr.addNullByte(alloc, password);
-                    errdefer alloc.free(str);
-                    break :blk str;
-                } else null;
+                const password_str: [*c]const u8 = if(opts.password) |password| (try std.cstr.addNullByte(alloc, password)) else null;
                 rc = Mosq.mosquitto_username_pw_set(self.mosq, username_str, password_str);
                 if(rc != Mosq.MOSQ_ERR_SUCCESS) {
                     std.log.err("mosquitto_username_pw_set: {s}", .{Mosq.mosquitto_strerror(rc)});
@@ -69,23 +62,9 @@ pub fn Client(comptime T: type) type {
             }
 
             if(opts.ca != null or opts.cert != null) {
-                const ca_path: [*c]const u8 = if(opts.ca) |ca| blk: {
-                    const str = try std.cstr.addNullByte(alloc, ca);
-                    errdefer alloc.free(str);
-                    break :blk str;
-                } else null;
-
-                const key_path: [*c]const u8 = if(opts.key) |key| blk: {
-                    const str = try std.cstr.addNullByte(alloc, key);
-                    errdefer alloc.free(str);
-                    break :blk str;
-                } else null;
-
-                const cert_path: [*c]const u8 = if(opts.cert) |cert| blk: {
-                    const str = try std.cstr.addNullByte(alloc, cert);
-                    errdefer alloc.free(str);
-                    break :blk str;
-                } else null;
+                const ca_path: [*c]const u8 = if(opts.ca) |ca| (try std.cstr.addNullByte(alloc, ca)) else null;
+                const key_path: [*c]const u8 = if(opts.key) |key| (try std.cstr.addNullByte(alloc, key)) else null;
+                const cert_path: [*c]const u8 = if(opts.cert) |cert| (try std.cstr.addNullByte(alloc, cert)) else null;
 
                 rc = Mosq.mosquitto_tls_set(self.mosq, ca_path, null, cert_path, key_path, null);
                 if(rc != Mosq.MOSQ_ERR_SUCCESS) {
@@ -109,6 +88,10 @@ pub fn Client(comptime T: type) type {
 
             std.log.info("MQTT: {s}:{d}", .{host, port});
             return self;
+        }
+
+        pub fn deinit(self: *Self) void {
+            Mosq.mosquitto_destroy(self.mosq);
         }
 
         pub fn connect(self: *Self) !void {
@@ -173,22 +156,28 @@ pub fn Mqtt(comptime T: type) type {
     return struct {
         const Self = @This();
         
+        arena: ArenaAllocator,
         clients: []*Client(T),
 
         pub fn init(alloc: *Allocator, conf: * const Config, user: T, handler: PacketHandler(T)) !*Self {
+            var arena = ArenaAllocator.init(alloc);
+            const self = try arena.allocator.create(Self);
+            errdefer self.deinit();
 
-            const self = try alloc.create(Self);
-            errdefer alloc.destroy(self);
-
-            self.clients = try alloc.alloc(*Client(T), conf.mqtt.brokers.len);
-            errdefer alloc.free(self.clients);
+            self.arena = arena;
+            self.clients = try arena.allocator.alloc(*Client(T), conf.mqtt.brokers.len);
 
             for (conf.mqtt.brokers) |broker, idx| {
-                const opts =  broker.options orelse conf.mqtt.options;
-                self.clients[idx] = try Client(T).init(alloc, broker.host, broker.port, opts, user, handler);
+                const opts = broker.options orelse conf.mqtt.options;
+                self.clients[idx] = try Client(T).init(&arena.allocator, broker.host, broker.port, opts, user, handler);
             }
 
             return self;
+        }
+
+        pub fn deinit(self: *Self) void {
+            for (self.clients) |client| client.deinit();
+            self.arena.deinit();
         }
 
         pub fn connect(self: *Self) !void {
