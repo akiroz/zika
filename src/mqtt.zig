@@ -113,6 +113,10 @@ pub fn Client(comptime T: type) type {
         fn onConnect(_mosq: ?*Mosq.mosquitto, self_ptr: ?*c_void, rc: c_int) callconv(.C) void {
             const self = @intToPtr(*Self, @ptrToInt(self_ptr orelse unreachable));
             std.log.info("connect[{d}]: {s}", .{self.nth, Mosq.mosquitto_strerror(rc)});
+            if(self.subscribtions.items.len < 1) {
+                std.log.err("mqtt: no subscriptions", .{});
+                std.os.exit(1);
+            }
             const len = @intCast(c_int, self.subscribtions.items.len);
             const subs = @ptrCast([*c]const [*c]u8, self.subscribtions.items);
             const sub_rc = Mosq.mosquitto_subscribe_multiple(self.mosq, null, len, subs, 0, 0, null);
