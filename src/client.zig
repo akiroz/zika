@@ -144,7 +144,7 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = &gpa.allocator;
     const conf_path = try std.fs.cwd().realpathAlloc(alloc, "zika_config.json");
-    const conf = try config.get(conf_path);
+    const conf = try config.get(alloc, conf_path);
     const client = try Client.init(alloc, &conf);
     try client.run();
 }

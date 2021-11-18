@@ -25,6 +25,7 @@ pub fn Client(comptime T: type) type {
         };
 
         mosq: *Mosq.mosquitto,
+        nth: usize,
         host_cstr: []u8,
         port: u16,
         keepalive: u16,
@@ -32,8 +33,9 @@ pub fn Client(comptime T: type) type {
         user: T,
         handler: PacketHandler(T),
 
-        pub fn init(alloc: *Allocator, host: []const u8, port: u16, opts: Opts, user: T, handler: PacketHandler(T)) !*Self {
+        pub fn init(alloc: *Allocator, nth: usize, host: []const u8, port: u16, opts: Opts, user: T, handler: PacketHandler(T)) !*Self {
             const self = try alloc.create(Self);
+            self.nth = nth;
             self.host_cstr = try std.cstr.addNullByte(alloc, host);
             self.port = port;
             self.keepalive = opts.keepalive_interval;
@@ -86,7 +88,7 @@ pub fn Client(comptime T: type) type {
             Mosq.mosquitto_subscribe_callback_set(self.mosq, onSubscribe);
             Mosq.mosquitto_message_callback_set(self.mosq, onMessage);
 
-            std.log.info("MQTT: {s}:{d}", .{host, port});
+            std.log.info("MQTT[{d}]: {s}:{d}", .{nth, host, port});
             return self;
         }
 
@@ -110,23 +112,25 @@ pub fn Client(comptime T: type) type {
 
         fn onConnect(_mosq: ?*Mosq.mosquitto, self_ptr: ?*c_void, rc: c_int) callconv(.C) void {
             const self = @intToPtr(*Self, @ptrToInt(self_ptr orelse unreachable));
-            std.log.info("connect: {s}", .{Mosq.mosquitto_strerror(rc)});
+            std.log.info("connect[{d}]: {s}", .{self.nth, Mosq.mosquitto_strerror(rc)});
             const len = @intCast(c_int, self.subscribtions.items.len);
             const subs = @ptrCast([*c]const [*c]u8, self.subscribtions.items);
             const sub_rc = Mosq.mosquitto_subscribe_multiple(self.mosq, null, len, subs, 0, 0, null);
             if(sub_rc != Mosq.MOSQ_ERR_SUCCESS) {
-                std.log.err("mosquitto_subscribe_multiple: {s}", .{Mosq.mosquitto_strerror(rc)});
+                std.log.err("mosquitto_subscribe_multiple[{d}]: {s}", .{self.nth, Mosq.mosquitto_strerror(sub_rc)});
                 std.os.exit(1);
             }
         }
 
         fn onDisconnect(_mosq: ?*Mosq.mosquitto, self_ptr: ?*c_void, rc: c_int) callconv(.C) void {
-            std.log.info("disconnect: {s}", .{Mosq.mosquitto_strerror(rc)});
+            const self = @intToPtr(*Self, @ptrToInt(self_ptr orelse unreachable));
+            std.log.info("disconnect[{d}]: {s}", .{self.nth, Mosq.mosquitto_strerror(rc)});
         }
 
         fn onSubscribe(_mosq: ?*Mosq.mosquitto, self_ptr: ?*c_void, mid: c_int, qos_len: c_int, qos_arr: [*c]const c_int) callconv(.C) void {
+            const self = @intToPtr(*Self, @ptrToInt(self_ptr orelse unreachable));
             const qos = qos_arr[0..@intCast(usize, qos_len)];
-            std.log.info("subscribe: {d}", .{qos});
+            std.log.info("subscribe[{d}]: {d}", .{self.nth, qos});
         }
 
         fn onMessage(_mosq: ?*Mosq.mosquitto, self_ptr: ?*c_void, msg: [*c]const Mosq.mosquitto_message) callconv(.C) void {
@@ -169,7 +173,7 @@ pub fn Mqtt(comptime T: type) type {
 
             for (conf.mqtt.brokers) |broker, idx| {
                 const opts = broker.options orelse conf.mqtt.options;
-                self.clients[idx] = try Client(T).init(&arena.allocator, broker.host, broker.port, opts, user, handler);
+                self.clients[idx] = try Client(T).init(&arena.allocator, idx, broker.host, broker.port, opts, user, handler);
             }
 
             return self;
