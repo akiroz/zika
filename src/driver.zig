@@ -99,7 +99,7 @@ fn PcapDriver(comptime T: type) type {
 
         pub fn write(self: *Self, pkt: []u8) !void {
             if(self.pcap) |pcap| {
-                if(Pcap.pcap_inject(pcap, @ptrCast([*c]u8, pkt), pkt.len) == Pcap.PCAP_ERROR) {
+                if(Pcap.pcap_inject(pcap, pkt.ptr, pkt.len) == Pcap.PCAP_ERROR) {
                     std.log.err("pcap_inject: {s}", .{Pcap.pcap_geterr(pcap)});
                     return Error.InjectFailed;
                 }
@@ -255,7 +255,7 @@ pub fn NetInterface(comptime T: type) type {
                     var pseudo_sum: u32 = 0;
                     for(pseudo_buf) |word| pseudo_sum += word;
                     const cksum_offset = payload_offset + if (hdr.proto == 6) @as(usize, 16) else 6;
-                    const cksum_slice = std.mem.bytesAsSlice(u16, @alignCast(2, pkt[cksum_offset..2]));
+                    const cksum_slice = std.mem.bytesAsSlice(u16, @alignCast(2, pkt[cksum_offset..cksum_offset+2]));
                     std.mem.set(u16, cksum_slice, 0); // Zero before recalc
                     std.mem.set(u16, cksum_slice, cksum(pkt[payload_offset..], pseudo_sum));
                 },

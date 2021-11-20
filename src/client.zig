@@ -11,6 +11,12 @@ const Config = config.Config;
 const NetInterface = driver.NetInterface;
 const IpHeader = driver.IpHeader;
 const Mqtt = mqtt.Mqtt;
+const ConnectHandler = mqtt.ConnectHandler;
+
+pub fn MessageHook(comptime T: type) type {
+    // user, message -> detach
+    return *const fn (T, []const u8, []const u8) bool;
+}
 
 pub fn Tunnel(comptime T: type) type {
     return struct {
@@ -23,7 +29,7 @@ pub fn Tunnel(comptime T: type) type {
         
         id: []u8,
         bind_addr: u32,
-        up_topic_cstr: []u8,        
+        up_topic_cstr: [:0]u8,        
 
         pub fn create(alloc: *Allocator, ifce: *NetInterface(T), broker: *Mqtt(T), conf: Conf) !*Self {
             const self = try alloc.create(Self);
@@ -42,7 +48,7 @@ pub fn Tunnel(comptime T: type) type {
             
             const dn_topic = try std.fmt.allocPrint(alloc, "{s}/{s}", .{conf.topic, b64_id});
             const dn_topic_cstr = try std.cstr.addNullByte(alloc, dn_topic);
-            try self.mqtt.subscribe(dn_topic_cstr);
+            try self.mqtt.subscribe(dn_topic_cstr, true);
             
             std.log.info("Tunnel: {s} -> {s} ({s})", .{conf.bind_addr, conf.topic, b64_id});
             return self;
@@ -69,18 +75,21 @@ pub const Client = struct {
     const Error = error {
         ConfigMissing
     };
-    
+
     arena: ArenaAllocator,
     ifce: ?*NetInterface(*Self),
     mqtt: ?*Mqtt(*Self),
     tunnels: []*Tunnel(*Self),
+
+    connect_callback: ?ConnectHandler(*Mqtt(*Self)),
+    disconnect_callback: ?ConnectHandler(*Mqtt(*Self)),
+    message_hook: ?MessageHook(*Mqtt(*Self)),
 
     pub fn init(alloc: *Allocator, conf: * const Config) !*Self {
         const client_conf = conf.client orelse {
             std.log.err("missing client config", .{});
             return Error.ConfigMissing;
         };
-
         var arena = ArenaAllocator.init(alloc);
         const self = try arena.allocator.create(Self);
         self.arena = arena;
@@ -88,10 +97,8 @@ pub const Client = struct {
 
         std.log.info("== Client Config =================================", .{});
         self.ifce = try NetInterface(*Self).init(&arena.allocator, conf, self, @ptrCast(driver.PacketHandler(*Self), &up));
-        
         const max_subs = client_conf.tunnels.len;
         self.mqtt = try Mqtt(*Self).init(&arena.allocator, conf, self, @ptrCast(mqtt.PacketHandler(*Self), &down), max_subs);
-        
         self.tunnels = try alloc.alloc(*Tunnel(*Self), client_conf.tunnels.len);
         for (client_conf.tunnels) |tunnel, idx| {
             self.tunnels[idx] = try Tunnel(*Self).create(
@@ -111,14 +118,34 @@ pub const Client = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        if(self.mqtt) |m| m.deinit();
-        if(self.ifce) |i| i.deinit();
+        self.mqtt.?.deinit();
+        self.ifce.?.deinit();
         self.arena.deinit();
     }
 
     pub fn run(self: *Self) !void {
-        if(self.mqtt) |m| try m.connect();
-        if(self.ifce) |i| try i.run();
+        try self.mqtt.?.connect();
+        try self.ifce.?.run();
+    }
+
+    pub fn setConnectCallback(self: *Self, cb: ConnectHandler(*Mqtt(*Self))) void {
+        self.connect_callback = cb;
+        self.mqtt.?.setConnectCallback(&onConnect);
+    }
+    fn onConnect(self: *Self, idx: usize, count: u32) void {
+        self.connect_callback.?.*(self.mqtt.?, idx, count);
+    }
+
+    pub fn setDisconnectCallback(self: *Self, cb: ConnectHandler(*Mqtt(*Self))) void {
+        self.disconnect_callback = cb;
+        self.mqtt.?.setDisconnectCallback(&onDisconnect);
+    }
+    fn onDisconnect(self: *Self, idx: usize, count: u32) void {
+        self.connect_callback.?.*(self.mqtt.?, idx, count);
+    }
+
+    pub fn attachMsgHook(self: *Self, cb: MessageHook(*Mqtt(*Self))) void {
+        self.message_hook = cb;
     }
 
     fn up(self: *Self, pkt: []u8) void {
@@ -131,16 +158,18 @@ pub const Client = struct {
         }
     }
 
-    fn down(self: *Self, pkt: []u8) void {
+    fn down(self: *Self, topic: []const u8, msg: []u8) void {
         for (self.tunnels) |tunnel| {
-            const handled = tunnel.down(pkt) catch |err| blk: {
+            const handled = tunnel.down(msg) catch |err| blk: {
                 std.log.warn("down: {s}", .{err});
                 break :blk false;
             };
             if(handled) break;
         }
+        if(self.message_hook) |cb| {
+            if(cb.*(self.mqtt.?, topic, msg)) self.message_hook = null;
+        }
     }
-
 };
 
 pub fn main() !void {
@@ -148,6 +177,6 @@ pub fn main() !void {
     const alloc = &gpa.allocator;
     const conf_path = try std.fs.cwd().realpathAlloc(alloc, "zika_config.json");
     const conf = try config.get(alloc, conf_path);
-    const client = try Client.init(alloc, &conf);
+    const client = try Client(void).init(alloc, &conf);
     try client.run();
 }

@@ -11,7 +11,13 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const Config = config.Config;
 
 pub fn PacketHandler(comptime T: type) type {
-    return *const fn (T, []const u8) void;
+    // user, message
+    return *const fn (T, []const u8, []const u8) void;
+}
+
+pub fn ConnectHandler(comptime T: type) type {
+    // mqtt_client, client_idx, connect_count
+    return *const fn (T, usize, u32) void;
 }
 
 pub fn Client(comptime T: type) type {
@@ -27,7 +33,7 @@ pub fn Client(comptime T: type) type {
             CreateFailed,
             OptionError,
             ConnectFailed,
-            SubscriptionListFull,
+            SubscribeFailed,
         };
 
         alloc: *Allocator,
@@ -38,7 +44,11 @@ pub fn Client(comptime T: type) type {
         subs: [][]u8,
         subs_count: u32,
         user: T,
-        handler: PacketHandler(T),
+        msg_callback: PacketHandler(T),
+        connect_count: u32,
+        connect_callback: ?ConnectHandler(T),
+        disconnect_callback: ?ConnectHandler(T),
+        subscribe_cond: std.Thread.Condition,
 
         pub fn init(alloc: *Allocator, conf: Conf, user: T, handler: PacketHandler(T), max_subs: usize) !*Self {
             const self = try alloc.create(Self);
@@ -46,9 +56,13 @@ pub fn Client(comptime T: type) type {
             self.conf = conf;
             self.host_cstr = try std.cstr.addNullByte(alloc, conf.host);
             self.subs_count = 0;
-            self.subs = try alloc.alloc([]u8, max_subs);
+            self.subs = try alloc.alloc([:0]u8, max_subs);
             self.user = user;
-            self.handler = handler;
+            self.msg_callback = handler;
+            self.connect_count = 0;
+            self.connect_callback = null;
+            self.disconnect_callback = null;
+            self.subscribe_cond = std.Thread.Condition {};
             self.mosq = Mosq.mosquitto_new(null, true, self) orelse {
                 return Error.CreateFailed;
             };
@@ -95,6 +109,7 @@ pub fn Client(comptime T: type) type {
             Mosq.mosquitto_disconnect_callback_set(self.mosq, onDisconnect);
             Mosq.mosquitto_subscribe_callback_set(self.mosq, onSubscribe);
             Mosq.mosquitto_message_callback_set(self.mosq, onMessage);
+            //Mosq.mosquitto_log_callback_set(self.mosq, onLog);
 
             std.log.info("MQTT[{d}]: {s}:{d}", .{ conf.nth, conf.host, conf.port });
             return self;
@@ -122,53 +137,78 @@ pub fn Client(comptime T: type) type {
         fn onConnect(_mosq: ?*Mosq.mosquitto, self_ptr: ?*c_void, rc: c_int) callconv(.C) void {
             const self = @intToPtr(*Self, @ptrToInt(self_ptr orelse unreachable));
             std.log.info("connect[{d}]: {s}", .{ self.conf.nth, Mosq.mosquitto_strerror(rc) });
-            if (self.subs_count < 1) {
-                std.log.err("mqtt: no subscriptions", .{});
-                std.os.exit(1);
+            
+            self.connect_count += 1;
+            if (self.connect_callback) |cb| {
+                cb.*(self.user, self.conf.nth, self.connect_count);
             }
 
-            const len = @intCast(c_int, self.subs_count);
-            const subs = @ptrCast([*c]const [*c]u8, self.subs);
-            const sub_rc = Mosq.mosquitto_subscribe_multiple(self.mosq, null, len, subs, 0, 0, null);
-            if (sub_rc != Mosq.MOSQ_ERR_SUCCESS) {
-                std.log.err("mosquitto_subscribe_multiple[{d}]: {s}", .{ self.conf.nth, Mosq.mosquitto_strerror(sub_rc) });
-                std.os.exit(1);
+            var i: usize = 0;
+            while(i < self.subs_count) : (i += 1) {
+                const sub_rc = Mosq.mosquitto_subscribe(self.mosq, null, self.subs[i].ptr, 0);
+                if(sub_rc != Mosq.MOSQ_ERR_SUCCESS and rc != Mosq.MOSQ_ERR_NO_CONN) {
+                    std.log.err("mosquitto_subscribe[{d}]: {s}", .{ self.conf.nth, Mosq.mosquitto_strerror(sub_rc) });
+                }
             }
         }
 
         fn onDisconnect(_mosq: ?*Mosq.mosquitto, self_ptr: ?*c_void, rc: c_int) callconv(.C) void {
             const self = @intToPtr(*Self, @ptrToInt(self_ptr orelse unreachable));
             std.log.info("disconnect[{d}]: {s}", .{ self.conf.nth, Mosq.mosquitto_strerror(rc) });
+            if (self.disconnect_callback) |cb| {
+                cb.*(self.user, self.conf.nth, self.connect_count);
+            }
         }
 
         fn onSubscribe(_mosq: ?*Mosq.mosquitto, self_ptr: ?*c_void, mid: c_int, qos_len: c_int, qos_arr: [*c]const c_int) callconv(.C) void {
             const self = @intToPtr(*Self, @ptrToInt(self_ptr orelse unreachable));
             const qos = qos_arr[0..@intCast(usize, qos_len)];
-            std.log.info("subscribe[{d}]: {s} {d}", .{ self.conf.nth, self.subs, qos });
+            for(qos) |q| if(q != 0) std.log.warn("subscribe[{d}]: {d}", .{ self.conf.nth, 1 });
+            self.subscribe_cond.broadcast();
         }
 
         fn onMessage(_mosq: ?*Mosq.mosquitto, self_ptr: ?*c_void, msg: [*c]const Mosq.mosquitto_message) callconv(.C) void {
-            std.log.info("message: {s}", .{msg.*.topic});
+            const topic = msg.*.topic[0..std.mem.len(msg.*.topic)];
+            // std.log.info("message: {s}", .{topic});
             const self = @intToPtr(*Self, @ptrToInt(self_ptr orelse unreachable));
             const len = @intCast(usize, msg.*.payloadlen);
             const payload = @ptrCast([*c]const u8, msg.*.payload)[0..len];
-            self.handler.*(self.user, payload);
+            self.msg_callback.*(self.user, topic, payload);
         }
 
-        // NOTE: topic must be null-terminated
-        pub fn subscribe(self: *Self, topic: []u8) !void {
-            if (self.subs_count < self.subs.len) {
-                self.subs[self.subs_count] = topic;
-                self.subs_count += 1;
+        fn onLog(_mosq: ?*Mosq.mosquitto, self_ptr: ?*c_void, level: c_int, msg: [*c]const u8) callconv(.C) void {
+            std.log.info("mosq({d}): {s}", .{level, msg});
+        }
+
+        pub fn subscribe(self: *Self, topic: [:0]u8, persistent: bool) !void {
+            if(persistent) {
+                if (self.subs_count < self.subs.len) {
+                    self.subs[self.subs_count] = topic;
+                    self.subs_count += 1;
+                } else {
+                    std.log.err("subscribe[{d}]: persistent subscription list is full", .{ self.conf.nth });
+                    return Error.SubscribeFailed;
+                }
             } else {
-                return Error.SubscriptionListFull;
+                const rc = Mosq.mosquitto_subscribe(self.mosq, null, topic.ptr, 0);
+                if(rc != Mosq.MOSQ_ERR_SUCCESS and rc != Mosq.MOSQ_ERR_NO_CONN) {
+                    std.log.err("mosquitto_subscribe[{d}]: {s}", .{ self.conf.nth, Mosq.mosquitto_strerror(rc) });
+                    return Error.SubscribeFailed;
+                }
             }
         }
 
         // NOTE: topic must be null-terminated
-        pub fn publish(self: *Self, topic: []u8, msg: []u8) bool {
-            const topic_c = @ptrCast([*c]const u8, topic);
-            const rc = Mosq.mosquitto_publish(self.mosq, null, topic_c, @intCast(c_int, msg.len), &msg, 0, false);
+        pub fn unsubscribe(self: *Self, topic: [:0]u8) void {
+            const rc = Mosq.mosquitto_unsubscribe(self.mosq, null, topic.ptr);
+            if(rc != Mosq.MOSQ_ERR_SUCCESS) {
+                std.log.err("mosquitto_unsubscribe[{d}]: {s}", .{ self.conf.nth, Mosq.mosquitto_strerror(rc) });
+            }
+        }
+
+        // NOTE: topic must be null-terminated
+        pub fn publish(self: *Self, topic: [:0]u8, msg: []u8) bool {
+            const rc = Mosq.mosquitto_publish(self.mosq, null, topic.ptr, @intCast(c_int, msg.len), msg.ptr, 0, false);
             return rc == Mosq.MOSQ_ERR_SUCCESS;
         }
     };
@@ -203,19 +243,27 @@ pub fn Mqtt(comptime T: type) type {
             self.arena.deinit();
         }
 
+        pub fn setConnectCallback(self: *Self, cb: ConnectHandler(T)) void {
+            for (self.clients) |client| client.connect_callback = cb;
+        }
+
+        pub fn setDisconnectCallback(self: *Self, cb: ConnectHandler(T)) void {
+            for (self.clients) |client| client.disconnect_callback = cb;
+        }
+
         pub fn connect(self: *Self) !void {
             for (self.clients) |client| try client.connect();
         }
 
-        // NOTE: topic must be null-terminated
-        pub fn subscribe(self: *Self, topic: []u8) !void {
-            for (self.clients) |client| {
-                try client.subscribe(topic);
-            }
+        pub fn subscribe(self: *Self, topic: [:0]u8, persistent: bool) !void {
+            for (self.clients) |client| try client.subscribe(topic, persistent);
         }
 
-        // NOTE: topic must be null-terminated
-        pub fn send(self: *Self, topic: []u8, msg: []u8) !void {
+        pub fn unsubscribe(self: *Self, topic: [:0]u8) !void {
+            for (self.clients) |client| client.unsubscribe(topic);
+        }
+
+        pub fn send(self: *Self, topic: [:0]u8, msg: []u8) !void {
             for (self.clients) |client| {
                 if (client.publish(topic, msg)) break;
             }
