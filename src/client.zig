@@ -18,32 +18,32 @@ pub fn Tunnel(comptime T: type) type {
         const Conf = config.ClientTunnel;
 
         conf: Conf,
-        bind_addr: u32,
-        id: []u8,
-        up_topic_cstr: []u8,
-        dn_topic_cstr: []u8,
-        
         ifce: *NetInterface(T),
         mqtt: *Mqtt(T),
+        
+        id: []u8,
+        bind_addr: u32,
+        up_topic_cstr: []u8,        
 
         pub fn create(alloc: *Allocator, ifce: *NetInterface(T), broker: *Mqtt(T), conf: Conf) !*Self {
             const self = try alloc.create(Self);
             self.conf = conf;
             self.ifce = ifce;
             self.mqtt = broker;
-            self.id = try alloc.alloc(u8, conf.id_length);
             self.bind_addr = (try Ip4Address.parse(conf.bind_addr, 0)).sa.addr;
-
+            self.id = try alloc.alloc(u8, conf.id_length);
+            
             std.crypto.random.bytes(self.id);
             const b64_len = Base64UrlEncoder.calcSize(conf.id_length);
             const b64_id = try alloc.alloc(u8, b64_len);
             _ = Base64UrlEncoder.encode(b64_id, self.id);
 
-            const up_topic = try std.fmt.allocPrint(alloc, "{s}/{s}", .{conf.topic, b64_id});
-            self.up_topic_cstr = try std.cstr.addNullByte(alloc, up_topic);
-            self.dn_topic_cstr = try std.cstr.addNullByte(alloc, conf.topic);
-            try self.mqtt.subscribe(self.dn_topic_cstr);
-
+            self.up_topic_cstr = try std.cstr.addNullByte(alloc, conf.topic);
+            
+            const dn_topic = try std.fmt.allocPrint(alloc, "{s}/{s}", .{conf.topic, b64_id});
+            const dn_topic_cstr = try std.cstr.addNullByte(alloc, dn_topic);
+            try self.mqtt.subscribe(dn_topic_cstr);
+            
             std.log.info("Tunnel: {s} -> {s} ({s})", .{conf.bind_addr, conf.topic, b64_id});
             return self;
         }
@@ -88,7 +88,10 @@ pub const Client = struct {
 
         std.log.info("== Client Config =================================", .{});
         self.ifce = try NetInterface(*Self).init(&arena.allocator, conf, self, @ptrCast(driver.PacketHandler(*Self), &up));
-        self.mqtt = try Mqtt(*Self).init(&arena.allocator, conf, self, @ptrCast(mqtt.PacketHandler(*Self), &down));
+        
+        const max_subs = client_conf.tunnels.len;
+        self.mqtt = try Mqtt(*Self).init(&arena.allocator, conf, self, @ptrCast(mqtt.PacketHandler(*Self), &down), max_subs);
+        
         self.tunnels = try alloc.alloc(*Tunnel(*Self), client_conf.tunnels.len);
         for (client_conf.tunnels) |tunnel, idx| {
             self.tunnels[idx] = try Tunnel(*Self).create(
