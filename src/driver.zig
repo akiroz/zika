@@ -3,14 +3,16 @@ const std = @import("std");
 const Config = @import("config.zig").Config;
 
 const Net = @cImport({
+    @cInclude("sys/ioctl.h");
     @cInclude("net/if.h");
-    @cInclude("net/if_tun.h");
+    @cInclude("linux/if_tun.h");
 });
 const Pcap = @cImport(@cInclude("pcap/pcap.h"));
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const Ip4Address = std.net.Ip4Address;
+const Address = std.net.Address;
 pub fn PacketHandler(comptime T: type) type {
     return *const fn(T, []const u8) void;
 }
@@ -29,9 +31,11 @@ fn PcapDriver(comptime T: type) type {
             NotInitialized,
         };
 
+        alloc: *Allocator,
         user: T,
         handler: PacketHandler(T),
         pcap: ?*Pcap.pcap_t,
+        pcap_header: [4]u8,
 
         pub fn init(alloc: *Allocator, conf: *const Config, user: T, handler: PacketHandler(T)) !*Self {
             const pcap_conf = conf.driver.pcap orelse {
@@ -40,12 +44,14 @@ fn PcapDriver(comptime T: type) type {
             };
 
             const self = try alloc.create(Self);
+            self.alloc = alloc;
             self.user = user;
             self.handler = handler;
+            self.pcap_header = .{2, 0, 0, 0};
             
             const interface = try std.cstr.addNullByte(alloc, pcap_conf.interface);
             var pcap_err = std.mem.zeroes([Pcap.PCAP_ERRBUF_SIZE]u8);
-            const pcap = Pcap.pcap_create(interface, @ptrCast([*c]u8, &pcap_err)) orelse {
+            const pcap = Pcap.pcap_create(interface, &pcap_err) orelse {
                 std.log.err("pcap_create: {s}", .{pcap_err});
                 return Error.CreateFailed;
             };
@@ -83,7 +89,7 @@ fn PcapDriver(comptime T: type) type {
 
         pub fn run(self: *Self) !void {
             if(self.pcap) |pcap| {
-                if(Pcap.pcap_loop(pcap, -1, recv, @intToPtr([*c]u8, @ptrToInt(self))) == Pcap.PCAP_ERROR) {
+                if(Pcap.pcap_loop(pcap, -1, recv, @ptrCast([*c]u8, self)) == Pcap.PCAP_ERROR) {
                     std.log.err("pcap_loop: {s}", .{Pcap.pcap_geterr(pcap)});
                     return Error.ReadFailed;
                 }
@@ -94,12 +100,16 @@ fn PcapDriver(comptime T: type) type {
 
         fn recv(self_ptr: [*c]u8, hdr: [*c]const Pcap.pcap_pkthdr, pkt: [*c]const u8) callconv(.C) void {
             const self = @intToPtr(*Self, @ptrToInt(self_ptr));
-            self.handler.*(self.user, pkt[0..hdr.*.len]);
+            self.handler.*(self.user, pkt[4..hdr.*.len]);
         }
 
         pub fn write(self: *Self, pkt: []u8) !void {
             if(self.pcap) |pcap| {
-                if(Pcap.pcap_inject(pcap, pkt.ptr, pkt.len) == Pcap.PCAP_ERROR) {
+                const frame = try self.alloc.alloc(u8, pkt.len + 4);
+                defer self.alloc.free(frame);
+                std.mem.copy(u8, frame, self.pcap_header[0..]);
+                std.mem.copy(u8, frame[4..], pkt);
+                if(Pcap.pcap_inject(pcap, frame.ptr, frame.len) == Pcap.PCAP_ERROR) {
                     std.log.err("pcap_inject: {s}", .{Pcap.pcap_geterr(pcap)});
                     return Error.InjectFailed;
                 }
@@ -117,51 +127,69 @@ fn TunDriver(comptime T: type) type {
         const Error = error {
             ConfigMissing,
             IoctlFailed,
+            ReadFailed,
         };
 
         user: T,
         handler: PacketHandler(T),
         tun: ?std.fs.File = null,
+        buf: []u8,
 
         pub fn init(alloc: *Allocator, conf: * const Config, user: T, handler: PacketHandler(T)) !*Self {
             const tun_conf = conf.driver.tun orelse {
                 std.log.err("missing tun driver config", .{});
                 return Error.ConfigMissing;
             };
-            const ip = try Ip4Address.parse(conf.driver.local_addr, 0);
-            const mask = try Ip4Address.parse(tun_conf.netmask, 0);
+            const ip = Address { .in = try Ip4Address.parse(conf.driver.local_addr, 0) };
+            const mask = Address { .in = try Ip4Address.parse(tun_conf.netmask, 0) };
 
             const self = try alloc.create(Self);
             self.user = user;
             self.handler = handler;
             self.tun = try std.fs.openFileAbsolute("/dev/net/tun", .{ .read = true, .write = true });
             errdefer self.deinit();
+            self.buf = try alloc.alloc(u8, 1 << 16); // 64k
 
-            var err = 0;      
-            const ifreq = std.mem.zeroes(std.c.ifreq);
+            var err: c_int = 0;      
+            var ifreq = std.mem.zeroes(std.os.ifreq);
 
             ifreq.ifru.flags = Net.IFF_TUN | Net.IFF_NO_PI;
-            err = std.c.ioctl(self.tun.handle, Net.TUNSETIFF, @ptrCast(c_void, &ifreq));
+            err = std.c.ioctl(self.tun.?.handle, Net.TUNSETIFF, &ifreq);
             if(err < 0) {
                 std.log.err("ioctl TUNSETIFF: {d}", .{std.c.getErrno(err)});
                 return Error.IoctlFailed;
             }
 
-            ifreq.ifru.addr = ip.sa;
-            std.c.ioctl(self.tun.handle, Net.SIOCSIFADDR, @ptrCast(c_void, &ifreq));
+            const sockfd = try std.os.socket(Net.AF_INET, Net.SOCK_DGRAM, 0);
+            defer std.os.close(sockfd);
+            
+            ifreq.ifru.addr = ip.any;
+            err = std.c.ioctl(sockfd, Net.SIOCSIFADDR, &ifreq);
+            if(err < 0) {
+                std.log.err("ioctl SIOCSIFADDR: {d}", .{std.c.getErrno(err)});
+                return Error.IoctlFailed;
+            }
 
-            ifreq.ifru.netmask = mask.sa;
-            std.c.ioctl(self.tun.handle, Net.SIOCSIFNETMASK, @ptrCast(c_void, &ifreq));
+            ifreq.ifru.netmask = mask.any;
+            err = std.c.ioctl(sockfd, Net.SIOCSIFNETMASK, &ifreq);
+            if(err < 0) {
+                std.log.err("ioctl SIOCSIFNETMASK: {d}", .{std.c.getErrno(err)});
+                return Error.IoctlFailed;
+            }
 
             ifreq.ifru.mtu = 1500;
-            std.c.ioctl(self.tun.handle, Net.SIOCSIFMTU, @ptrCast(c_void, &ifreq));
-
-            std.c.ioctl(self.tun.handle, Net.SIOCGIFFLAGS, @ptrCast(c_void, &ifreq));
-            ifreq.ifru.flags |= Net.IFF_UP | Net.IFF_RUNNING;
-            ifreq.ifru.flags &= ~Net.IFF_MULTICAST;
-            err = std.c.ioctl(self.tun.handle, Net.SIOCGIFFLAGS, @ptrCast(c_void, &ifreq));
+            err = std.c.ioctl(sockfd, Net.SIOCSIFMTU, &ifreq);
             if(err < 0) {
-                std.log.err("ioctl SIOCGIFFLAGS: {d}", .{std.c.getErrno(err)});
+                std.log.err("ioctl SIOCSIFMTU: {d}", .{std.c.getErrno(err)});
+                return Error.IoctlFailed;
+            }
+
+            err = std.c.ioctl(sockfd, Net.SIOCGIFFLAGS, &ifreq);
+            ifreq.ifru.flags |= @as(i16, Net.IFF_UP | Net.IFF_RUNNING);
+            ifreq.ifru.flags &= @as(i16, ~Net.IFF_MULTICAST);
+            err = std.c.ioctl(sockfd, Net.SIOCSIFFLAGS, &ifreq);
+            if(err < 0) {
+                std.log.err("ioctl SIOCSIFFLAGS: {d}", .{std.c.getErrno(err)});
                 return Error.IoctlFailed;
             }
 
@@ -170,15 +198,19 @@ fn TunDriver(comptime T: type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            if(self.tun) |tun| tun.close();
+            self.tun.?.close();
         }
 
         pub fn run(self: *Self) !void {
-
+            while(true) {
+                const len = try self.tun.?.read(self.buf);
+                if(len == 0) return Error.ReadFailed;
+                self.handler.*(self.user, self.buf[0..len]);
+            }
         }
 
         pub fn write(self: *Self, pkt: []u8) !void {
-            try self.tun.write(pkt);
+            _ = try self.tun.?.write(pkt);
         }
 
     };
@@ -228,51 +260,50 @@ pub fn NetInterface(comptime T: type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            if(self.driver) |drv| drv.deinit();
+            self.driver.?.deinit();
             self.arena.deinit();
         }
 
         pub fn run(self: *Self) !void {
-            if(self.driver) |drv| try drv.run();
+            try self.driver.?.run();
         }
 
         pub fn inject(self: *Self, src: u32, pkt: []u8) !void {
             const hdr = @ptrCast(*IpHeader, pkt);
-            const payload_offset = hdr.ihl * 4;
+            const payload_offset = @intCast(u16, hdr.ihl) * 4;
             hdr.src = src;
             hdr.dst = self.local_ip;
             hdr.cksum = 0; // Zero before recalc
-            hdr.cksum = cksum(pkt[0..payload_offset], 0);
+            hdr.cksum = try cksum(&self.arena.allocator, pkt[0..payload_offset], 0);
             switch (hdr.proto) {
                 6, 17 => { // TCP / UDP
-                    var pseudo_hdr = PseudoHeader {
-                        .src = src,
-                        .dst = self.local_ip,
-                        .proto = hdr.proto,
-                        .len = std.mem.nativeToBig(u16, @intCast(u16, pkt.len) - payload_offset),
-                    };
-                    const pseudo_buf = @ptrCast(*[@sizeOf(PseudoHeader)/2]u16, @alignCast(2, &pseudo_hdr));
+                    var pseudo_buf = std.mem.zeroes([@sizeOf(PseudoHeader)/2]u16);
+                    const pseudo_hdr = @ptrCast(*PseudoHeader, &pseudo_buf);
+                    pseudo_hdr.src = src;
+                    pseudo_hdr.dst = self.local_ip;
+                    pseudo_hdr.proto = hdr.proto;
+                    pseudo_hdr.len = std.mem.nativeToBig(u16, @intCast(u16, pkt.len) - payload_offset);
                     var pseudo_sum: u32 = 0;
                     for(pseudo_buf) |word| pseudo_sum += word;
                     const cksum_offset = payload_offset + if (hdr.proto == 6) @as(usize, 16) else 6;
-                    const cksum_slice = std.mem.bytesAsSlice(u16, @alignCast(2, pkt[cksum_offset..cksum_offset+2]));
-                    std.mem.set(u16, cksum_slice, 0); // Zero before recalc
-                    std.mem.set(u16, cksum_slice, cksum(pkt[payload_offset..], pseudo_sum));
+                    const cksum_slice = pkt[cksum_offset..cksum_offset+2];
+                    std.mem.set(u8, cksum_slice, 0); // Zero before recalc
+                    var sum = try cksum(&self.arena.allocator, pkt[payload_offset..], pseudo_sum);
+                    std.mem.copy(u8, cksum_slice, @ptrCast(*[2]u8, &sum));
                 },
                 else => {}, // No special handling
             }
-            if(self.driver) |drv| try drv.write(pkt);
+            try self.driver.?.write(pkt);
         }
 
-        fn cksum(buf: []u8, carry: u32) u16 {
+        fn cksum(alloc: *Allocator, buf: []u8, carry: u32) !u16 {
             var sum: u32 = carry;
-            const buf2 = std.mem.bytesAsSlice(u16, @alignCast(2, buf));
+            const buf2 = try alloc.alloc(u16, buf.len/2 + 1);
+            defer alloc.free(buf2);
+            std.mem.set(u16, buf2, 0);
+            const buf2_ptr = @ptrCast([*]u8, buf2);
+            std.mem.copy(u8, buf2_ptr[0..buf2.len*2], buf);
             for (buf2) |word| sum += word;
-            if (buf.len % 2 != 0) {
-                var last: u16 = 0;
-                @ptrCast(*[2]u8, &last)[0] = buf[buf.len - 1];
-                sum += last;
-            }
             while (sum > 0xffff) {
                 sum = (sum & 0xffff) + (sum >> 16);
             }

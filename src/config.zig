@@ -1,4 +1,5 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 pub const MqttOptions = struct {
     keepalive_interval: u16 = 60,

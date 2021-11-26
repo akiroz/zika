@@ -24,16 +24,19 @@ pub fn Tunnel(comptime T: type) type {
         const Conf = config.ClientTunnel;
 
         conf: Conf,
+        alloc: *Allocator,
         ifce: *NetInterface(T),
         mqtt: *Mqtt(T),
         
         id: []u8,
         bind_addr: u32,
-        up_topic_cstr: [:0]u8,        
+        up_topic_cstr: [:0]u8,
+        dn_topic_cstr: [:0]u8,
 
         pub fn create(alloc: *Allocator, ifce: *NetInterface(T), broker: *Mqtt(T), conf: Conf) !*Self {
             const self = try alloc.create(Self);
             self.conf = conf;
+            self.alloc = alloc;
             self.ifce = ifce;
             self.mqtt = broker;
             self.bind_addr = (try Ip4Address.parse(conf.bind_addr, 0)).sa.addr;
@@ -47,8 +50,8 @@ pub fn Tunnel(comptime T: type) type {
             self.up_topic_cstr = try std.cstr.addNullByte(alloc, conf.topic);
             
             const dn_topic = try std.fmt.allocPrint(alloc, "{s}/{s}", .{conf.topic, b64_id});
-            const dn_topic_cstr = try std.cstr.addNullByte(alloc, dn_topic);
-            try self.mqtt.subscribe(dn_topic_cstr, true);
+            self.dn_topic_cstr = try std.cstr.addNullByte(alloc, dn_topic);
+            try self.mqtt.subscribe(self.dn_topic_cstr, true);
             
             std.log.info("Tunnel: {s} -> {s} ({s})", .{conf.bind_addr, conf.topic, b64_id});
             return self;
@@ -57,14 +60,17 @@ pub fn Tunnel(comptime T: type) type {
         pub fn up(self: *Self, pkt: []u8) !bool {
             const hdr = @ptrCast(*IpHeader, pkt);
             if(hdr.dst != self.bind_addr) return false;
-            try self.mqtt.send(self.up_topic_cstr, pkt);
+            const payload = try self.alloc.alloc(u8, self.id.len + pkt.len);
+            defer self.alloc.free(payload);
+            std.mem.copy(u8, payload, self.id);
+            std.mem.copy(u8, payload[self.id.len..], pkt);
+            try self.mqtt.send(self.up_topic_cstr, payload);
             return true;
         }
 
-        pub fn down(self: *Self, msg: []u8) !bool {
-            const id = msg[0..self.conf.id_length];
-            if(!std.mem.eql(u8, self.id, id)) return false;
-            try self.ifce.inject(self.bind_addr, msg[id.len..]);
+        pub fn down(self: *Self, topic: []const u8, msg: []u8) !bool {
+            if(!std.mem.eql(u8, topic, self.dn_topic_cstr)) return false;
+            try self.ifce.inject(self.bind_addr, msg);
             return true;
         }
     };
@@ -85,24 +91,25 @@ pub const Client = struct {
     disconnect_callback: ?ConnectHandler(*Mqtt(*Self)),
     message_hook: ?MessageHook(*Mqtt(*Self)),
 
-    pub fn init(alloc: *Allocator, conf: * const Config) !*Self {
+    pub fn init(parent_alloc: *Allocator, conf: * const Config) !*Self {
         const client_conf = conf.client orelse {
             std.log.err("missing client config", .{});
             return Error.ConfigMissing;
         };
-        var arena = ArenaAllocator.init(alloc);
+        var arena = ArenaAllocator.init(parent_alloc);
         const self = try arena.allocator.create(Self);
         self.arena = arena;
         errdefer self.deinit();
+        const alloc = &self.arena.allocator;
 
         std.log.info("== Client Config =================================", .{});
-        self.ifce = try NetInterface(*Self).init(&arena.allocator, conf, self, @ptrCast(driver.PacketHandler(*Self), &up));
+        self.ifce = try NetInterface(*Self).init(alloc, conf, self, @ptrCast(driver.PacketHandler(*Self), &up));
         const max_subs = client_conf.tunnels.len;
-        self.mqtt = try Mqtt(*Self).init(&arena.allocator, conf, self, @ptrCast(mqtt.PacketHandler(*Self), &down), max_subs);
+        self.mqtt = try Mqtt(*Self).init(alloc, conf, self, @ptrCast(mqtt.PacketHandler(*Self), &down), max_subs);
         self.tunnels = try alloc.alloc(*Tunnel(*Self), client_conf.tunnels.len);
         for (client_conf.tunnels) |tunnel, idx| {
             self.tunnels[idx] = try Tunnel(*Self).create(
-                &arena.allocator,
+                alloc,
                 self.ifce orelse unreachable,
                 self.mqtt orelse unreachable,
                 .{
@@ -160,7 +167,7 @@ pub const Client = struct {
 
     fn down(self: *Self, topic: []const u8, msg: []u8) void {
         for (self.tunnels) |tunnel| {
-            const handled = tunnel.down(msg) catch |err| blk: {
+            const handled = tunnel.down(topic, msg) catch |err| blk: {
                 std.log.warn("down: {s}", .{err});
                 break :blk false;
             };

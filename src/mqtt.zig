@@ -109,7 +109,7 @@ pub fn Client(comptime T: type) type {
             Mosq.mosquitto_disconnect_callback_set(self.mosq, onDisconnect);
             Mosq.mosquitto_subscribe_callback_set(self.mosq, onSubscribe);
             Mosq.mosquitto_message_callback_set(self.mosq, onMessage);
-            //Mosq.mosquitto_log_callback_set(self.mosq, onLog);
+            // Mosq.mosquitto_log_callback_set(self.mosq, onLog);
 
             std.log.info("MQTT[{d}]: {s}:{d}", .{ conf.nth, conf.host, conf.port });
             return self;
@@ -134,7 +134,7 @@ pub fn Client(comptime T: type) type {
             }
         }
 
-        fn onConnect(_mosq: ?*Mosq.mosquitto, self_ptr: ?*c_void, rc: c_int) callconv(.C) void {
+        fn onConnect(_: ?*Mosq.mosquitto, self_ptr: ?*c_void, rc: c_int) callconv(.C) void {
             const self = @intToPtr(*Self, @ptrToInt(self_ptr orelse unreachable));
             std.log.info("connect[{d}]: {s}", .{ self.conf.nth, Mosq.mosquitto_strerror(rc) });
             
@@ -152,7 +152,7 @@ pub fn Client(comptime T: type) type {
             }
         }
 
-        fn onDisconnect(_mosq: ?*Mosq.mosquitto, self_ptr: ?*c_void, rc: c_int) callconv(.C) void {
+        fn onDisconnect(_: ?*Mosq.mosquitto, self_ptr: ?*c_void, rc: c_int) callconv(.C) void {
             const self = @intToPtr(*Self, @ptrToInt(self_ptr orelse unreachable));
             std.log.info("disconnect[{d}]: {s}", .{ self.conf.nth, Mosq.mosquitto_strerror(rc) });
             if (self.disconnect_callback) |cb| {
@@ -160,14 +160,14 @@ pub fn Client(comptime T: type) type {
             }
         }
 
-        fn onSubscribe(_mosq: ?*Mosq.mosquitto, self_ptr: ?*c_void, mid: c_int, qos_len: c_int, qos_arr: [*c]const c_int) callconv(.C) void {
+        fn onSubscribe(_: ?*Mosq.mosquitto, self_ptr: ?*c_void, _mid: c_int, qos_len: c_int, qos_arr: [*c]const c_int) callconv(.C) void {
             const self = @intToPtr(*Self, @ptrToInt(self_ptr orelse unreachable));
             const qos = qos_arr[0..@intCast(usize, qos_len)];
             for(qos) |q| if(q != 0) std.log.warn("subscribe[{d}]: {d}", .{ self.conf.nth, 1 });
             self.subscribe_cond.broadcast();
         }
 
-        fn onMessage(_mosq: ?*Mosq.mosquitto, self_ptr: ?*c_void, msg: [*c]const Mosq.mosquitto_message) callconv(.C) void {
+        fn onMessage(_: ?*Mosq.mosquitto, self_ptr: ?*c_void, msg: [*c]const Mosq.mosquitto_message) callconv(.C) void {
             const topic = msg.*.topic[0..std.mem.len(msg.*.topic)];
             // std.log.info("message: {s}", .{topic});
             const self = @intToPtr(*Self, @ptrToInt(self_ptr orelse unreachable));
@@ -176,7 +176,7 @@ pub fn Client(comptime T: type) type {
             self.msg_callback.*(self.user, topic, payload);
         }
 
-        fn onLog(_mosq: ?*Mosq.mosquitto, self_ptr: ?*c_void, level: c_int, msg: [*c]const u8) callconv(.C) void {
+        fn onLog(_: ?*Mosq.mosquitto, _: ?*c_void, level: c_int, msg: [*c]const u8) callconv(.C) void {
             std.log.info("mosq({d}): {s}", .{level, msg});
         }
 
