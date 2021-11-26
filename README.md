@@ -1,5 +1,7 @@
 # Zika
 
+![](https://img.shields.io/badge/zig-0.8.1-informational)
+
 IP Tunneling over MQTT
 
 Supports 2 network drivers:
