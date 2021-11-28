@@ -30,7 +30,7 @@ See [zika_config.sample.json](zika_config.sample.json)
 
 Dependencies:
 - libmosquitto
-- libpcap (MacOS only)
+- libpcap (MacOS only, built-in)
 - linux-headers (Linux only)
 
 ```
