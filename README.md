@@ -28,6 +28,11 @@ See [zika_config.sample.json](zika_config.sample.json)
 
 ### Building
 
+Dependencies:
+- libmosquitto
+- libpcap (MacOS only)
+- linux-headers (Linux only)
+
 ```
 $ zig build
 ```
