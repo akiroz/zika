@@ -37,8 +37,6 @@
     "// In bytes (Optional, default shown, must match client)": "",
     "id_length": 4,
     "topic": "zika/OjFcZWEAGy2E3Vkh",
-    "// Optional, default shown": "",
-    "max_tunnels": 16,
     "pool_start": "172.20.0.100",
     "pool_end": "172.20.0.200"
   },

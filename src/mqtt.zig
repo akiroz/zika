@@ -38,6 +38,7 @@ pub fn Client(comptime T: type) type {
 
         alloc: *Allocator,
         mosq: *Mosq.mosquitto,
+        mosq_thread: ?*std.Thread,
 
         conf: Conf,
         host_cstr: []const u8,
@@ -116,20 +117,28 @@ pub fn Client(comptime T: type) type {
         }
 
         pub fn deinit(self: *Self) void {
+            _ = Mosq.mosquitto_disconnect(self.mosq);
+            if(self.mosq_thread) |t| std.Thread.wait(t);
             Mosq.mosquitto_destroy(self.mosq);
         }
 
         pub fn connect(self: *Self) !void {
-            var rc = Mosq.mosquitto_loop_start(self.mosq);
-            if (rc != Mosq.MOSQ_ERR_SUCCESS) {
-                std.log.err("mosquitto_loop_start: {s}", .{Mosq.mosquitto_strerror(rc)});
-                return Error.ConnectFailed;
-            }
+            _ = Mosq.mosquitto_threaded_set(self.mosq, true);
+            self.mosq_thread = try std.Thread.spawn(thread_main, self);
 
             const keepalive = self.conf.opts.keepalive_interval;
-            rc = Mosq.mosquitto_connect_async(self.mosq, @ptrCast([*c]const u8, self.host_cstr), self.conf.port, keepalive);
+            const rc = Mosq.mosquitto_connect_async(self.mosq, @ptrCast([*c]const u8, self.host_cstr), self.conf.port, keepalive);
             if (rc != Mosq.MOSQ_ERR_SUCCESS) {
                 std.log.err("mosquitto_connect_async: {s}", .{Mosq.mosquitto_strerror(rc)});
+                return Error.ConnectFailed;
+            }
+        }
+
+        fn thread_main(self: *Self) !void {
+            const keepalive = self.conf.opts.keepalive_interval;
+            const rc = Mosq.mosquitto_loop_forever(self.mosq, keepalive*1000, 1);
+            if (rc != Mosq.MOSQ_ERR_SUCCESS) {
+                std.log.err("mosquitto_loop_forever: {s}", .{Mosq.mosquitto_strerror(rc)});
                 return Error.ConnectFailed;
             }
         }

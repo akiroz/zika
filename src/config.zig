@@ -43,7 +43,6 @@ pub const DriverConfig = struct {
 pub const ServerConfig = struct {
     id_length: u8 = 4,
     topic: []const u8,
-    max_tunnels: u16 = 16,
     pool_start: []const u8,
     pool_end: []const u8,
 };

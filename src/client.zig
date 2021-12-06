@@ -99,6 +99,8 @@ pub const Client = struct {
         var arena = ArenaAllocator.init(parent_alloc);
         const self = try arena.allocator.create(Self);
         self.arena = arena;
+        self.ifce = null;
+        self.mqtt = null;
         errdefer self.deinit();
         const alloc = &self.arena.allocator;
 
@@ -125,8 +127,8 @@ pub const Client = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        self.mqtt.?.deinit();
-        self.ifce.?.deinit();
+        if(self.mqtt) |m| m.deinit();
+        if(self.ifce) |i| i.deinit();
         self.arena.deinit();
     }
 
@@ -184,6 +186,6 @@ pub fn main() !void {
     const alloc = &gpa.allocator;
     const conf_path = try std.fs.cwd().realpathAlloc(alloc, "zika_config.json");
     const conf = try config.get(alloc, conf_path);
-    const client = try Client(void).init(alloc, &conf);
+    const client = try Client.init(alloc, &conf);
     try client.run();
 }
