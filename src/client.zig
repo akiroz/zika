@@ -24,7 +24,7 @@ pub fn Tunnel(comptime T: type) type {
         const Conf = config.ClientTunnel;
 
         conf: Conf,
-        alloc: *Allocator,
+        alloc: Allocator,
         ifce: *NetInterface(T),
         mqtt: *Mqtt(T),
         
@@ -33,7 +33,7 @@ pub fn Tunnel(comptime T: type) type {
         up_topic_cstr: [:0]u8,
         dn_topic_cstr: [:0]u8,
 
-        pub fn create(alloc: *Allocator, ifce: *NetInterface(T), broker: *Mqtt(T), conf: Conf) !*Self {
+        pub fn create(alloc: Allocator, ifce: *NetInterface(T), broker: *Mqtt(T), conf: Conf) !*Self {
             const self = try alloc.create(Self);
             self.conf = conf;
             self.alloc = alloc;
@@ -83,6 +83,7 @@ pub const Client = struct {
     };
 
     arena: ArenaAllocator,
+    alloc: Allocator,
     ifce: ?*NetInterface(*Self),
     mqtt: ?*Mqtt(*Self),
     tunnels: []*Tunnel(*Self),
@@ -91,27 +92,27 @@ pub const Client = struct {
     disconnect_callback: ?ConnectHandler(*Mqtt(*Self)),
     message_hook: ?MessageHook(*Mqtt(*Self)),
 
-    pub fn init(parent_alloc: *Allocator, conf: * const Config) !*Self {
+    pub fn init(parent_alloc: Allocator, conf: * const Config) !*Self {
         const client_conf = conf.client orelse {
             std.log.err("missing client config", .{});
             return Error.ConfigMissing;
         };
-        var arena = ArenaAllocator.init(parent_alloc);
-        const self = try arena.allocator.create(Self);
-        self.arena = arena;
+        const self = try parent_alloc.create(Self);
+        self.arena = ArenaAllocator.init(parent_alloc);
+        self.alloc = self.arena.allocator();
         self.ifce = null;
         self.mqtt = null;
         errdefer self.deinit();
-        const alloc = &self.arena.allocator;
 
         std.log.info("== Client Config =================================", .{});
-        self.ifce = try NetInterface(*Self).init(alloc, conf, self, @ptrCast(driver.PacketHandler(*Self), &up));
+        self.ifce = try NetInterface(*Self).init(self.alloc, conf, self, @ptrCast(driver.PacketHandler(*Self), &up));
         const max_subs = client_conf.tunnels.len;
-        self.mqtt = try Mqtt(*Self).init(alloc, conf, self, @ptrCast(mqtt.PacketHandler(*Self), &down), max_subs);
-        self.tunnels = try alloc.alloc(*Tunnel(*Self), client_conf.tunnels.len);
+        self.mqtt = try Mqtt(*Self).init(self.alloc, conf, self, @ptrCast(mqtt.PacketHandler(*Self), &down), max_subs);
+        std.log.info("Tunnels: {d}", .{client_conf.tunnels.len});
+        self.tunnels = try self.alloc.alloc(*Tunnel(*Self), client_conf.tunnels.len);
         for (client_conf.tunnels) |tunnel, idx| {
             self.tunnels[idx] = try Tunnel(*Self).create(
-                alloc,
+                self.alloc,
                 self.ifce orelse unreachable,
                 self.mqtt orelse unreachable,
                 .{
@@ -183,9 +184,11 @@ pub const Client = struct {
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const alloc = &gpa.allocator;
+    var alloc = gpa.allocator();
     const conf_path = try std.fs.cwd().realpathAlloc(alloc, "zika_config.json");
     const conf = try config.get(alloc, conf_path);
     const client = try Client.init(alloc, &conf);
+    defer client.deinit();
+    defer alloc.destroy(client);
     try client.run();
 }

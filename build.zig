@@ -1,17 +1,32 @@
 const builtin = @import("builtin");
-const Builder = @import("std").build.Builder;
+const std = @import("std");
+const LibExeObjStep = std.build.LibExeObjStep;
 
-pub fn build(b: *Builder) void {
-    const server = b.addExecutable("zika-server", "src/server.zig");
-    const client = b.addExecutable("zika-client", "src/client.zig");
-    server.addIncludeDir("/usr/local/include");
-    client.addIncludeDir("/usr/local/include");
-    server.linkSystemLibrary("mosquitto");
-    client.linkSystemLibrary("mosquitto");
-    if (builtin.target.isDarwin()) {
-        server.linkSystemLibrary("pcap");
-        client.linkSystemLibrary("pcap");
+fn commonOpts(exe: *LibExeObjStep) *LibExeObjStep {
+    exe.setBuildMode(exe.builder.standardReleaseOptions());
+    if (builtin.target.isDarwin()) { // macOS
+        if (builtin.cpu.arch == .aarch64) { // Apple
+            exe.addIncludeDir("/opt/homebrew/include");
+            exe.addLibPath("/opt/homebrew/lib");
+        } else { // Intel
+            exe.addIncludeDir("/usr/local/include");
+        }
+        exe.linkSystemLibrary("pcap");
+    } else { // Linux
+        exe.addIncludeDir("/usr/include");
+        exe.addLibPath("/usr/lib");
+        exe.linkLibC();
+        // Support down to Ubuntu 18 Bionic
+        exe.setTarget(.{ .glibc_version = .{ .major = 2, .minor = 27, .patch = 0 } });
     }
-    //server.install();
+    exe.linkSystemLibrary("mosquitto");
+    return exe;
+}
+
+pub fn build(b: *std.build.Builder) void {
+    const server = commonOpts(b.addExecutable("zika-server", "src/server.zig"));
+    server.install();
+    
+    const client = commonOpts(b.addExecutable("zika-client", "src/client.zig"));
     client.install();
 }

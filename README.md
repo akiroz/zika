@@ -1,6 +1,6 @@
 # Zika
 
-![](https://img.shields.io/badge/zig-0.8.1-informational)
+![](https://img.shields.io/badge/zig-0.9.1-informational)
 
 IP Tunneling over MQTT
 

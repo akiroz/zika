@@ -10,7 +10,6 @@ const Net = @cImport({
 const Pcap = @cImport(@cInclude("pcap/pcap.h"));
 
 const Allocator = std.mem.Allocator;
-const ArenaAllocator = std.heap.ArenaAllocator;
 const Ip4Address = std.net.Ip4Address;
 const Address = std.net.Address;
 pub fn PacketHandler(comptime T: type) type {
@@ -31,13 +30,13 @@ fn PcapDriver(comptime T: type) type {
             NotInitialized,
         };
 
-        alloc: *Allocator,
+        alloc: Allocator,
         user: T,
         handler: PacketHandler(T),
         pcap: ?*Pcap.pcap_t,
         pcap_header: [4]u8,
 
-        pub fn init(alloc: *Allocator, conf: *const Config, user: T, handler: PacketHandler(T)) !*Self {
+        pub fn init(alloc: Allocator, conf: *const Config, user: T, handler: PacketHandler(T)) !*Self {
             const pcap_conf = conf.driver.pcap orelse {
                 std.log.err("missing pcap driver config", .{});
                 return Error.ConfigMissing;
@@ -99,7 +98,7 @@ fn PcapDriver(comptime T: type) type {
         }
 
         fn recv(self_ptr: [*c]u8, hdr: [*c]const Pcap.pcap_pkthdr, pkt: [*c]const u8) callconv(.C) void {
-            const self = @intToPtr(*Self, @ptrToInt(self_ptr));
+            const self = @ptrCast(*Self, @alignCast(@alignOf(*Self), self_ptr.?));
             self.handler.*(self.user, pkt[4..hdr.*.len]);
         }
 
@@ -135,7 +134,7 @@ fn TunDriver(comptime T: type) type {
         tun: ?std.fs.File = null,
         buf: []u8,
 
-        pub fn init(alloc: *Allocator, conf: * const Config, user: T, handler: PacketHandler(T)) !*Self {
+        pub fn init(alloc: Allocator, conf: *const Config, user: T, handler: PacketHandler(T)) !*Self {
             const tun_conf = conf.driver.tun orelse {
                 std.log.err("missing tun driver config", .{});
                 return Error.ConfigMissing;
@@ -243,16 +242,14 @@ pub fn NetInterface(comptime T: type) type {
 
     return struct {
         const Self = @This();
-        
-        arena: ArenaAllocator,
+        alloc: Allocator,
         local_ip: u32,
         driver: ?*Driver(T) = null,
         
-        pub fn init(alloc: *Allocator, conf: * const Config, user: T, handler: PacketHandler(T)) !*Self {
-            var arena = ArenaAllocator.init(alloc);
-            const self = try arena.allocator.create(Self);
-            self.arena = arena;
+        pub fn init(alloc: Allocator, conf: *const Config, user: T, handler: PacketHandler(T)) !*Self {
+            const self = try alloc.create(Self);
             errdefer self.deinit();
+            self.alloc = alloc;
             self.local_ip = (try Ip4Address.parse(conf.driver.local_addr, 0)).sa.addr;
             self.driver = try Driver(T).init(alloc, conf, user, handler);
             std.log.info("Local IP: {s}", .{conf.driver.local_addr});
@@ -261,7 +258,6 @@ pub fn NetInterface(comptime T: type) type {
 
         pub fn deinit(self: *Self) void {
             self.driver.?.deinit();
-            self.arena.deinit();
         }
 
         pub fn run(self: *Self) !void {
@@ -274,7 +270,7 @@ pub fn NetInterface(comptime T: type) type {
             hdr.src = src;
             hdr.dst = self.local_ip;
             hdr.cksum = 0; // Zero before recalc
-            hdr.cksum = try cksum(&self.arena.allocator, pkt[0..payload_offset], 0);
+            hdr.cksum = try self.cksum(pkt[0..payload_offset], 0);
             switch (hdr.proto) {
                 6, 17 => { // TCP / UDP
                     var pseudo_buf = std.mem.zeroes([@sizeOf(PseudoHeader)/2]u16);
@@ -288,7 +284,7 @@ pub fn NetInterface(comptime T: type) type {
                     const cksum_offset = payload_offset + if (hdr.proto == 6) @as(usize, 16) else 6;
                     const cksum_slice = pkt[cksum_offset..cksum_offset+2];
                     std.mem.set(u8, cksum_slice, 0); // Zero before recalc
-                    var sum = try cksum(&self.arena.allocator, pkt[payload_offset..], pseudo_sum);
+                    var sum = try self.cksum(pkt[payload_offset..], pseudo_sum);
                     std.mem.copy(u8, cksum_slice, @ptrCast(*[2]u8, &sum));
                 },
                 else => {}, // No special handling
@@ -296,10 +292,10 @@ pub fn NetInterface(comptime T: type) type {
             try self.driver.?.write(pkt);
         }
 
-        fn cksum(alloc: *Allocator, buf: []u8, carry: u32) !u16 {
+        fn cksum(self: *Self, buf: []u8, carry: u32) !u16 {
             var sum: u32 = carry;
-            const buf2 = try alloc.alloc(u16, buf.len/2 + 1);
-            defer alloc.free(buf2);
+            const buf2 = try self.alloc.alloc(u16, buf.len/2 + 1);
+            defer self.alloc.free(buf2);
             std.mem.set(u16, buf2, 0);
             const buf2_ptr = @ptrCast([*]u8, buf2);
             std.mem.copy(u8, buf2_ptr[0..buf2.len*2], buf);
@@ -307,7 +303,7 @@ pub fn NetInterface(comptime T: type) type {
             while (sum > 0xffff) {
                 sum = (sum & 0xffff) + (sum >> 16);
             }
-            return @intCast(u16, sum ^ 0xffff);
+            return @truncate(u16, sum ^ 0xffff);
         }
     };
 }
