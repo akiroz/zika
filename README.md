@@ -1,6 +1,6 @@
 # Zika
 
-![](https://img.shields.io/badge/zig-0.8.1-informational)
+![](https://img.shields.io/badge/zig-0.10.0-informational)
 
 IP Tunneling over MQTT
 
@@ -34,5 +34,5 @@ Dependencies:
 - linux-headers (Linux only)
 
 ```
-$ zig build
+$ zig build -Drelease-safe=true
 ```

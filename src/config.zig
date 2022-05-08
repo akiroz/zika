@@ -9,10 +9,10 @@ pub const MqttOptions = struct {
     username: ?[]const u8 = null,
     password: ?[]const u8 = null,
 
-    ca: ?[]const u8 = null,
+    ca_file: ?[]const u8 = null,
     tls_insecure: bool = false,
-    key: ?[]const u8 = null,
-    cert: ?[]const u8 = null,
+    key_file: ?[]const u8 = null,
+    cert_file: ?[]const u8 = null,
 };
 
 pub const MqttBroker = struct {
@@ -64,8 +64,8 @@ pub const Config = struct {
     client: ?ClientConfig = null,
 };
 
-pub fn get(alloc: *Allocator, file: []u8) !Config {
-    const cfg_file = try std.fs.openFileAbsolute(file, .{ .read = true });
+pub fn get(alloc: Allocator, file: []u8) !Config {
+    const cfg_file = try std.fs.openFileAbsolute(file, .{ .mode = .read_only });
     defer cfg_file.close();
 
     const file_size = try cfg_file.getEndPos();

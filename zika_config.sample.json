@@ -6,9 +6,9 @@
       "password": "",
 
       "// Optional TLS": "",
-      "ca": "ca.pem",
-      "key": "key.pem",
-      "cert": "cert.pem",
+      "ca_file": "ca.pem",
+      "key_file": "key.pem",
+      "cert_file": "cert.pem",
       "tls_insecure": false,
 
       "// Unit: seconds (int), Optonal: defaults shown": "",
