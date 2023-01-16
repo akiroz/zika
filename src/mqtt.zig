@@ -154,12 +154,13 @@ pub fn Client(comptime T: type) type {
         }
 
         fn onConnect(mosq: ?*Mosq.mosquitto, self_ptr: ?*anyopaque, rc: c_int) callconv(.C) void {
+            _ = mosq;
             const self = @ptrCast(*Self, @alignCast(@alignOf(*Self), self_ptr.?));
             std.log.info("connect[{d}]: {s}", .{ self.conf.nth, Mosq.mosquitto_strerror(rc) });
             self.connected = true;
             self.connect_count += 1;
             if (self.connect_callback) |cb| {
-                cb(self.user, self.conf.nth, self.connect_count);
+                cb.*(self.user, self.conf.nth, self.connect_count);
             }
 
             var i: usize = 0;
@@ -177,7 +178,7 @@ pub fn Client(comptime T: type) type {
             std.log.info("disconnect[{d}]: {s}", .{ self.conf.nth, Mosq.mosquitto_strerror(rc) });
             self.connected = false;
             if (self.disconnect_callback) |cb| {
-                cb(self.user, self.conf.nth, self.connect_count);
+                cb.*(self.user, self.conf.nth, self.connect_count);
             }
         }
 
@@ -196,7 +197,7 @@ pub fn Client(comptime T: type) type {
             const topic = msg.*.topic[0..std.mem.len(msg.*.topic)];
             // std.log.info("message: {s}", .{topic});
             const payload = @ptrCast([*]u8, msg.*.payload.?)[0..@intCast(usize, msg.*.payloadlen)];
-            self.msg_callback(self.user, topic, payload);
+            self.msg_callback.*(self.user, topic, payload);
         }
 
         fn onLog(mosq: *Mosq.mosquitto, self: *Self, level: c_int, msg: [*]const u8) callconv(.C) void {

@@ -6,16 +6,16 @@ fn commonOpts(exe: *LibExeObjStep) *LibExeObjStep {
     exe.setBuildMode(exe.builder.standardReleaseOptions());
     if (builtin.target.isDarwin()) { // macOS
         if (builtin.cpu.arch == .aarch64) { // Apple
-            exe.addIncludePath("/opt/homebrew/include");
-            exe.addLibraryPath("/opt/homebrew/lib");
+            exe.addIncludeDir("/opt/homebrew/include");
+            exe.addLibPath("/opt/homebrew/lib");
         } else { // Intel
-            exe.addIncludePath("/usr/local/include");
-            exe.addLibraryPath("/usr/local/lib");
+            exe.addIncludeDir("/usr/local/include");
+            exe.addLibPath("/usr/local/lib");
         }
         exe.linkSystemLibrary("pcap");
     } else { // Linux
-        exe.addIncludePath("/usr/include");
-        exe.addLibraryPath("/usr/lib");
+        exe.addIncludeDir("/usr/include");
+        exe.addLibPath("/usr/lib");
         exe.linkLibC();
         // Support down to Ubuntu 20 Focal
         exe.setTarget(.{ .glibc_version = .{ .major = 2, .minor = 31, .patch = 0 } });

@@ -50,7 +50,7 @@ fn PcapDriver(comptime T: type) type {
             
             const interface = try std.cstr.addNullByte(alloc, pcap_conf.interface);
             var pcap_err = std.mem.zeroes([Pcap.PCAP_ERRBUF_SIZE]u8);
-            const pcap = Pcap.pcap_create(@ptrCast([*c]const u8, interface), &pcap_err) orelse {
+            const pcap = Pcap.pcap_create(interface, &pcap_err) orelse {
                 std.log.err("pcap_create: {s}", .{pcap_err});
                 return Error.CreateFailed;
             };
@@ -67,7 +67,7 @@ fn PcapDriver(comptime T: type) type {
             const filter_spec = try std.fmt.allocPrint(alloc, "ip and not dst host {s}", .{conf.driver.local_addr});
             const filter_cstr = try std.cstr.addNullByte(alloc, filter_spec);
             var filter: Pcap.bpf_program = undefined;
-            if(Pcap.pcap_compile(pcap, &filter, @ptrCast([*c]const u8,filter_cstr), 1, Pcap.PCAP_NETMASK_UNKNOWN) < 0) {
+            if(Pcap.pcap_compile(pcap, &filter, filter_cstr, 1, Pcap.PCAP_NETMASK_UNKNOWN) < 0) {
                 std.log.err("pcap_compile: {s}", .{Pcap.pcap_geterr(pcap)});
                 return Error.CompileFilterFailed;
             }
@@ -99,7 +99,7 @@ fn PcapDriver(comptime T: type) type {
 
         fn recv(self_ptr: [*c]u8, hdr: [*c]const Pcap.pcap_pkthdr, pkt: [*c]const u8) callconv(.C) void {
             const self = @ptrCast(*Self, @alignCast(@alignOf(*Self), self_ptr.?));
-            self.handler(self.user, pkt[4..hdr.*.len]);
+            self.handler.*(self.user, pkt[4..hdr.*.len]);
         }
 
         pub fn write(self: *Self, pkt: []u8) !void {
@@ -145,7 +145,7 @@ fn TunDriver(comptime T: type) type {
             const self = try alloc.create(Self);
             self.user = user;
             self.handler = handler;
-            self.tun = try std.fs.openFileAbsolute("/dev/net/tun", .{ .mode = .read_write });
+            self.tun = try std.fs.openFileAbsolute("/dev/net/tun", .{ .read = true, .write = true });
             errdefer self.deinit();
             self.buf = try alloc.alloc(u8, 1 << 16); // 64k
 
@@ -264,7 +264,7 @@ pub fn NetInterface(comptime T: type) type {
             try self.driver.?.run();
         }
 
-        pub fn inject(self: *Self, src: u32, pkt: [] align(@alignOf(IpHeader)) u8) !void {
+        pub fn inject(self: *Self, src: u32, pkt: []u8) !void {
             const hdr = @ptrCast(*IpHeader, pkt);
             const payload_offset = @intCast(u16, hdr.ihl) * 4;
             hdr.src = src;
@@ -273,7 +273,7 @@ pub fn NetInterface(comptime T: type) type {
             hdr.cksum = try self.cksum(pkt[0..payload_offset], 0);
             switch (hdr.proto) {
                 6, 17 => { // TCP / UDP
-                    var pseudo_buf align(@alignOf(IpHeader)) = std.mem.zeroes([@sizeOf(PseudoHeader)/2]u16);
+                    var pseudo_buf = std.mem.zeroes([@sizeOf(PseudoHeader)/2]u16);
                     const pseudo_hdr = @ptrCast(*PseudoHeader, &pseudo_buf);
                     pseudo_hdr.src = src;
                     pseudo_hdr.dst = self.local_ip;

@@ -65,7 +65,7 @@ pub const Config = struct {
 };
 
 pub fn get(alloc: Allocator, file: []u8) !Config {
-    const cfg_file = try std.fs.openFileAbsolute(file, .{ .mode = .read_only });
+    const cfg_file = try std.fs.openFileAbsolute(file, .{ .read = true });
     defer cfg_file.close();
 
     const file_size = try cfg_file.getEndPos();

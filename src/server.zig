@@ -108,19 +108,20 @@ pub const Server = struct {
         const topic = try std.fmt.allocPrintZ(self.alloc, "{s}/{s}", .{ self.topic_cstr, b64_id });
         try self.topic_cache.put(next_addr, topic);
 
+        std.log.info("alloc({s}): {X}", .{b64_id, next_addr});
         return next_addr;
     }
 
-    fn up(self: *Self, pkt: [] align(@alignOf(IpHeader)) u8) void {
+    fn up(self: *Self, pkt: []u8) void {
         const hdr = @ptrCast(*IpHeader, pkt);
         if (self.topic_cache.get(hdr.dst)) |topic| {
             self.mqtt.?.send(topic, pkt) catch |err| {
-                std.log.warn("up: {}", .{err});
+                std.log.warn("up: {s}", .{err});
             };
         }
     }
 
-    fn down(self: *Self, topic: []const u8, msg: [] align(@alignOf(IpHeader)) u8) void {
+    fn down(self: *Self, topic: []const u8, msg: []u8) void {
         _ = topic;
         var id: u128 = 0;
         std.mem.copy(u8, @ptrCast(*[@sizeOf(u128)]u8, &id), msg[0..self.id_len]);
@@ -128,9 +129,8 @@ pub const Server = struct {
             std.log.err("allocIp: {any}", .{err});
             @panic("allocIp failed");
         };
-        const alignedSlice = @alignCast(@alignOf(IpHeader), msg[self.id_len..]);
-        self.ifce.?.inject(addr, alignedSlice) catch |err| {
-            std.log.warn("down: {}", .{err});
+        self.ifce.?.inject(addr, msg[self.id_len..]) catch |err| {
+            std.log.warn("down: {s}", .{err});
         };
     }
 };
