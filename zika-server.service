@@ -1,0 +1,7 @@
+[Unit]
+After=network.target
+
+[Service]
+WorkingDirectory=<...>
+ExecStart=<...>/zika-server
+Restart=always
