@@ -57,7 +57,7 @@ pub fn Tunnel(comptime T: type) type {
             return self;
         }
 
-        pub fn up(self: *Self, pkt: []u8) !bool {
+        pub fn up(self: *Self, pkt: [] align(@alignOf(IpHeader)) u8) !bool {
             const hdr = @ptrCast(*IpHeader, pkt);
             if(hdr.dst != self.bind_addr) return false;
             const payload = try self.alloc.alloc(u8, self.id.len + pkt.len);
@@ -68,7 +68,7 @@ pub fn Tunnel(comptime T: type) type {
             return true;
         }
 
-        pub fn down(self: *Self, topic: []const u8, msg: []u8) !bool {
+        pub fn down(self: *Self, topic: []const u8, msg: [] align(@alignOf(IpHeader)) u8) !bool {
             if(!std.mem.eql(u8, topic, self.dn_topic_cstr)) return false;
             try self.ifce.inject(self.bind_addr, msg);
             return true;
@@ -109,7 +109,7 @@ pub const Client = struct {
         const max_subs = client_conf.tunnels.len;
         self.mqtt = try Mqtt(*Self).init(self.alloc, conf, self, @ptrCast(mqtt.PacketHandler(*Self), &down), max_subs);
         self.tunnels = try self.alloc.alloc(*Tunnel(*Self), client_conf.tunnels.len);
-        for (client_conf.tunnels) |tunnel, idx| {
+        for (client_conf.tunnels, 0..) |tunnel, idx| {
             self.tunnels[idx] = try Tunnel(*Self).create(
                 self.alloc,
                 self.ifce orelse unreachable,
@@ -142,7 +142,7 @@ pub const Client = struct {
         self.mqtt.?.setConnectCallback(&onConnect);
     }
     fn onConnect(self: *Self, idx: usize, count: u32) void {
-        self.connect_callback.?.*(self.mqtt.?, idx, count);
+        self.connect_callback.?(self.mqtt.?, idx, count);
     }
 
     pub fn setDisconnectCallback(self: *Self, cb: ConnectHandler(*Mqtt(*Self))) void {
@@ -150,33 +150,33 @@ pub const Client = struct {
         self.mqtt.?.setDisconnectCallback(&onDisconnect);
     }
     fn onDisconnect(self: *Self, idx: usize, count: u32) void {
-        self.connect_callback.?.*(self.mqtt.?, idx, count);
+        self.connect_callback.?(self.mqtt.?, idx, count);
     }
 
     pub fn attachMsgHook(self: *Self, cb: MessageHook(*Mqtt(*Self))) void {
         self.message_hook = cb;
     }
 
-    fn up(self: *Self, pkt: []u8) void {
+    fn up(self: *Self, pkt: [] align(@alignOf(IpHeader)) u8) void {
         for (self.tunnels) |tunnel| {
             const handled = tunnel.up(pkt) catch |err| blk: {
-                std.log.warn("up: {s}", .{err});
+                std.log.warn("up: {}", .{err});
                 break :blk false;
             };
             if(handled) break;
         }
     }
 
-    fn down(self: *Self, topic: []const u8, msg: []u8) void {
+    fn down(self: *Self, topic: []const u8, msg: [] align(@alignOf(IpHeader)) u8) void {
         for (self.tunnels) |tunnel| {
             const handled = tunnel.down(topic, msg) catch |err| blk: {
-                std.log.warn("down: {s}", .{err});
+                std.log.warn("down: {}", .{err});
                 break :blk false;
             };
             if(handled) break;
         }
         if(self.message_hook) |cb| {
-            if(cb.*(self.mqtt.?, topic, msg)) self.message_hook = null;
+            if(cb(self.mqtt.?, topic, msg)) self.message_hook = null;
         }
     }
 };

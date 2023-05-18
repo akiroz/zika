@@ -1,33 +1,41 @@
 const builtin = @import("builtin");
 const std = @import("std");
-const LibExeObjStep = std.build.LibExeObjStep;
+const Compile = std.Build.Step.Compile;
 
-fn commonOpts(exe: *LibExeObjStep) *LibExeObjStep {
-    exe.setBuildMode(exe.builder.standardReleaseOptions());
+fn commonOpts(exe: *Compile) *Compile {
     if (builtin.target.isDarwin()) { // macOS
         if (builtin.cpu.arch == .aarch64) { // Apple
-            exe.addIncludeDir("/opt/homebrew/include");
-            exe.addLibPath("/opt/homebrew/lib");
+            exe.addIncludePath("/opt/homebrew/include");
+            exe.addLibraryPath("/opt/homebrew/lib");
         } else { // Intel
-            exe.addIncludeDir("/usr/local/include");
-            exe.addLibPath("/usr/local/lib");
+            exe.addIncludePath("/usr/local/include");
+            exe.addLibraryPath("/usr/local/lib");
         }
         exe.linkSystemLibrary("pcap");
     } else { // Linux
-        exe.addIncludeDir("/usr/include");
-        exe.addLibPath("/usr/lib");
+        exe.addIncludePath("/usr/include");
+        exe.addIncludePath("/usr/include/x86_64-linux-gnu");
+        exe.addLibraryPath("/usr/lib");
+        exe.addLibraryPath("/usr/lib/x86_64-linux-gnu");
         exe.linkLibC();
-        // Support down to Ubuntu 20 Focal
-        exe.setTarget(.{ .glibc_version = .{ .major = 2, .minor = 31, .patch = 0 } });
     }
     exe.linkSystemLibrary("mosquitto");
     return exe;
 }
-
 pub fn build(b: *std.build.Builder) void {
-    const server = commonOpts(b.addExecutable("zika-server", "src/server.zig"));
-    server.install();
-    
-    const client = commonOpts(b.addExecutable("zika-client", "src/client.zig"));
-    client.install();
+    const server = commonOpts(b.addExecutable(.{
+        .name = "zika-server",
+        .root_source_file = .{ .path = "src/server.zig" },
+        // Support down to Ubuntu 20 Focal
+        .target = if (builtin.target.isGnuLibC()) .{ .glibc_version = .{ .major = 2, .minor = 31, .patch = 0 } } else .{},
+    }));
+    b.installArtifact(server);
+
+    const client = commonOpts(b.addExecutable(.{
+        .name = "zika-client",
+        .root_source_file = .{ .path = "src/client.zig" },
+        // Support down to Ubuntu 20 Focal
+        .target = if (builtin.target.isGnuLibC()) .{ .glibc_version = .{ .major = 2, .minor = 31, .patch = 0 } } else .{},
+    }));
+    b.installArtifact(client);
 }

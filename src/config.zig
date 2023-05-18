@@ -1,6 +1,10 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const Error = error{
+    MissingConfig,
+};
+
 pub const MqttOptions = struct {
     keepalive_interval: u16 = 60,
     reconnect_interval_min: u16 = 1,
@@ -23,7 +27,7 @@ pub const MqttBroker = struct {
 
 pub const MqttConfig = struct {
     options: MqttOptions = .{},
-    brokers: []MqttBroker,
+    brokers: []const MqttBroker,
 };
 
 pub const DriverPcap = struct {
@@ -54,7 +58,7 @@ pub const ClientTunnel = struct {
 };
 
 pub const ClientConfig = struct {
-    tunnels: []ClientTunnel,
+    tunnels: []const ClientTunnel,
 };
 
 pub const Config = struct {
@@ -65,18 +69,14 @@ pub const Config = struct {
 };
 
 pub fn get(alloc: Allocator, file: []u8) !Config {
-    const cfg_file = try std.fs.openFileAbsolute(file, .{ .read = true });
-    defer cfg_file.close();
-
-    const file_size = try cfg_file.getEndPos();
-    const cfg_buf = try alloc.alloc(u8, file_size);
-    defer alloc.free(cfg_buf);
-
-    _ = try cfg_file.readAll(cfg_buf);
-    var stream = std.json.TokenStream.init(cfg_buf);
+    const cfg_file = std.fs.cwd().readFileAlloc(alloc, file, 4096) catch |err| {
+        std.log.err("Failed to open {s}: {any}", .{ file, err });
+        return Error.MissingConfig;
+    };
+    var json_stream = std.json.TokenStream.init(cfg_file);
 
     @setEvalBranchQuota(2000);
-    return try std.json.parse(Config, &stream, .{
+    return try std.json.parse(Config, &json_stream, .{
         .allocator = alloc,
         .duplicate_field_behavior = .UseLast,
         .ignore_unknown_fields = true,
