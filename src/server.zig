@@ -58,15 +58,15 @@ pub const Server = struct {
         self.ip_cache = IpCache.init(self.alloc);
         self.id_cache = IdCache.init(self.alloc);
         self.b64_len = Base64UrlEncoder.calcSize(self.id_len);
-        self.topic_cstr = try std.cstr.addNullByte(self.alloc, server_conf.topic);
+        self.topic_cstr = try self.alloc.dupeZ(u8, server_conf.topic);
         self.topic_cache = TopicCache.init(self.alloc);
 
         std.log.info("== Server Config =================================", .{});
         std.log.info("ID Length: {d}", .{server_conf.id_length});
         std.log.info("Topic: {s}", .{server_conf.topic});
         std.log.info("IP Pool: {s} - {s}", .{ server_conf.pool_start, server_conf.pool_end });
-        self.ifce = try NetInterface(*Self).init(self.alloc, conf, self, @ptrCast(driver.PacketHandler(*Self), &up));
-        self.mqtt = try Mqtt(*Self).init(self.alloc, conf, self, @ptrCast(mqtt.PacketHandler(*Self), &down), 1);
+        self.ifce = try NetInterface(*Self).init(self.alloc, conf, self, @ptrCast(&up));
+        self.mqtt = try Mqtt(*Self).init(self.alloc, conf, self, @as(mqtt.PacketHandler(*Self), @ptrCast(&down)), 1);
         try self.mqtt.?.subscribe(self.topic_cstr, true);
         std.log.info("==================================================", .{});
 
@@ -101,9 +101,9 @@ pub const Server = struct {
         try self.ip_cache.put(id, next_addr);
         try self.id_cache.put(next_addr, id);
 
-        var b64_id = try self.alloc.alloc(u8, self.b64_len);
+        const b64_id = try self.alloc.alloc(u8, self.b64_len);
         defer self.alloc.free(b64_id);
-        var id_bytes = std.mem.toBytes(id)[0..self.id_len];
+        const id_bytes = std.mem.toBytes(id)[0..self.id_len];
         _ = Base64UrlEncoder.encode(b64_id, id_bytes);
         const topic = try std.fmt.allocPrintZ(self.alloc, "{s}/{s}", .{ self.topic_cstr, b64_id });
         try self.topic_cache.put(next_addr, topic);
@@ -114,7 +114,7 @@ pub const Server = struct {
     }
 
     fn up(self: *Self, pkt: [] align(@alignOf(IpHeader)) u8) void {
-        const hdr = @ptrCast(*IpHeader, pkt);
+        const hdr = @as(*IpHeader, @ptrCast(pkt));
         if (self.topic_cache.get(hdr.dst)) |topic| {
             self.mqtt.?.send(topic, pkt) catch |err| {
                 std.log.warn("up: {}", .{err});
@@ -125,13 +125,12 @@ pub const Server = struct {
     fn down(self: *Self, topic: []const u8, msg: [] align(@alignOf(IpHeader)) u8) void {
         _ = topic;
         var id: u128 = 0;
-        std.mem.copy(u8, @ptrCast(*[@sizeOf(u128)]u8, &id), msg[0..self.id_len]);
+        std.mem.copy(u8, @as(*[@sizeOf(u128)]u8, @ptrCast(&id)), msg[0..self.id_len]);
         const addr = self.ip_cache.get(id) orelse self.allocIp(id) catch |err| {
             std.log.err("allocIp: {any}", .{err});
             @panic("allocIp failed");
         };
-        const alignedSlice = @alignCast(@alignOf(IpHeader), msg[self.id_len..]);
-        self.ifce.?.inject(addr, alignedSlice) catch |err| {
+        self.ifce.?.inject(addr, @alignCast(msg[self.id_len..])) catch |err| {
             std.log.warn("down: {}", .{err});
         };
     }

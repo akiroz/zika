@@ -47,10 +47,10 @@ pub fn Tunnel(comptime T: type) type {
             const b64_id = try alloc.alloc(u8, b64_len);
             _ = Base64UrlEncoder.encode(b64_id, self.id);
 
-            self.up_topic_cstr = try std.cstr.addNullByte(alloc, conf.topic);
-            
+            self.up_topic_cstr = try alloc.dupeZ(u8, conf.topic);
+
             const dn_topic = try std.fmt.allocPrint(alloc, "{s}/{s}", .{conf.topic, b64_id});
-            self.dn_topic_cstr = try std.cstr.addNullByte(alloc, dn_topic);
+            self.dn_topic_cstr = try alloc.dupeZ(u8, dn_topic);
             try self.mqtt.subscribe(self.dn_topic_cstr, true);
             
             std.log.info("Tunnel: {s} -> {s} ({s})", .{conf.bind_addr, conf.topic, b64_id});
@@ -58,7 +58,7 @@ pub fn Tunnel(comptime T: type) type {
         }
 
         pub fn up(self: *Self, pkt: [] align(@alignOf(IpHeader)) u8) !bool {
-            const hdr = @ptrCast(*IpHeader, pkt);
+            const hdr = @as(*IpHeader, @ptrCast(pkt));
             if(hdr.dst != self.bind_addr) return false;
             const payload = try self.alloc.alloc(u8, self.id.len + pkt.len);
             defer self.alloc.free(payload);
@@ -105,9 +105,9 @@ pub const Client = struct {
         errdefer self.deinit();
 
         std.log.info("== Client Config =================================", .{});
-        self.ifce = try NetInterface(*Self).init(self.alloc, conf, self, @ptrCast(driver.PacketHandler(*Self), &up));
+        self.ifce = try NetInterface(*Self).init(self.alloc, conf, self, @ptrCast(&up));
         const max_subs = client_conf.tunnels.len;
-        self.mqtt = try Mqtt(*Self).init(self.alloc, conf, self, @ptrCast(mqtt.PacketHandler(*Self), &down), max_subs);
+        self.mqtt = try Mqtt(*Self).init(self.alloc, conf, self, @ptrCast(&down), max_subs);
         self.tunnels = try self.alloc.alloc(*Tunnel(*Self), client_conf.tunnels.len);
         for (client_conf.tunnels, 0..) |tunnel, idx| {
             self.tunnels[idx] = try Tunnel(*Self).create(

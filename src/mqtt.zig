@@ -58,7 +58,7 @@ pub fn Client(comptime T: type) type {
             self.arena = ArenaAllocator.init(parent_alloc);
             self.alloc = self.arena.allocator();
             self.conf = conf;
-            self.host_cstr = try std.cstr.addNullByte(self.alloc, conf.host);
+            self.host_cstr = try self.alloc.dupeZ(u8, conf.host);
             self.subs_count = 0;
             self.subs = try self.alloc.alloc([:0]u8, max_subs);
             self.user = user;
@@ -83,8 +83,8 @@ pub fn Client(comptime T: type) type {
             if (opts.username) |username| {
                 rc = Mosq.mosquitto_username_pw_set(
                     self.mosq,
-                    (try std.cstr.addNullByte(self.alloc, username)).ptr,
-                    if (opts.password) |p| (try std.cstr.addNullByte(self.alloc, p)).ptr else null
+                    (try self.alloc.dupeZ(u8, username)).ptr,
+                    if (opts.password) |p| (try self.alloc.dupeZ(u8, p)).ptr else null
                 );
                 if (rc != Mosq.MOSQ_ERR_SUCCESS) {
                     std.log.err("mosquitto_username_pw_set: {s}", .{Mosq.mosquitto_strerror(rc)});
@@ -95,10 +95,10 @@ pub fn Client(comptime T: type) type {
             if (opts.ca_file != null or opts.cert_file != null) {
                 rc = Mosq.mosquitto_tls_set(
                     self.mosq,
-                    if (opts.ca_file) |ca| (try std.cstr.addNullByte(self.alloc, ca)).ptr else null,
+                    if (opts.ca_file) |ca| (try self.alloc.dupeZ(u8, ca)).ptr else null,
                     null, // capath
-                    if (opts.cert_file) |cert| (try std.cstr.addNullByte(self.alloc, cert)).ptr else null,
-                    if (opts.key_file) |key| (try std.cstr.addNullByte(self.alloc, key)).ptr else null,
+                    if (opts.cert_file) |cert| (try self.alloc.dupeZ(u8, cert)).ptr else null,
+                    if (opts.key_file) |key| (try self.alloc.dupeZ(u8, key)).ptr else null,
                     null // pw_callback
                 );
                 if (rc != Mosq.MOSQ_ERR_SUCCESS) {
@@ -137,7 +137,7 @@ pub fn Client(comptime T: type) type {
             self.mosq_thread = try std.Thread.spawn(.{}, thread_main, .{ self });
 
             const keepalive = self.conf.opts.keepalive_interval;
-            const rc = Mosq.mosquitto_connect_async(self.mosq, @ptrCast([*c]const u8, self.host_cstr), self.conf.port, keepalive);
+            const rc = Mosq.mosquitto_connect_async(self.mosq, @as([*c]const u8,@ptrCast(self.host_cstr)), self.conf.port, keepalive);
             if (rc != Mosq.MOSQ_ERR_SUCCESS) {
                 std.log.err("mosquitto_connect_async: {s}", .{Mosq.mosquitto_strerror(rc)});
                 return Error.ConnectFailed;
@@ -154,7 +154,7 @@ pub fn Client(comptime T: type) type {
         }
 
         fn onConnect(mosq: ?*Mosq.mosquitto, self_ptr: ?*anyopaque, rc: c_int) callconv(.C) void {
-            const self = @ptrCast(*Self, @alignCast(@alignOf(*Self), self_ptr.?));
+            const self = @as(*Self,@ptrCast(@alignCast(self_ptr.?)));
             std.log.info("connect[{d}]: {s}", .{ self.conf.nth, Mosq.mosquitto_strerror(rc) });
             self.connected = true;
             self.connect_count += 1;
@@ -173,7 +173,7 @@ pub fn Client(comptime T: type) type {
 
         fn onDisconnect(mosq: ?*Mosq.mosquitto, self_ptr: ?*anyopaque, rc: c_int) callconv(.C) void {
             _ = mosq;
-            const self = @ptrCast(*Self, @alignCast(@alignOf(*Self), self_ptr.?));
+            const self = @as(*Self, @ptrCast(@alignCast(self_ptr.?)));
             std.log.info("disconnect[{d}]: {s}", .{ self.conf.nth, Mosq.mosquitto_strerror(rc) });
             self.connected = false;
             if (self.disconnect_callback) |cb| {
@@ -184,18 +184,18 @@ pub fn Client(comptime T: type) type {
         fn onSubscribe(mosq: ?*Mosq.mosquitto, self_ptr: ?*anyopaque, mid: c_int, qos_len: c_int, qos_arr: [*c]const c_int) callconv(.C) void {
             _ = mosq;
             _ = mid;
-            const self = @ptrCast(*Self, @alignCast(@alignOf(*Self), self_ptr.?));
-            const qos = qos_arr[0..@intCast(usize, qos_len)];
+            const self = @as(*Self, @ptrCast(@alignCast(self_ptr.?)));
+            const qos = qos_arr[0..@as(usize,@intCast(qos_len))];
             for (qos) |q| if (q != 0) std.log.warn("subscribe[{d}]: {d}", .{ self.conf.nth, q });
             self.subscribe_cond.broadcast();
         }
 
         fn onMessage(mosq: ?*Mosq.mosquitto, self_ptr: ?*anyopaque, msg: [*c]const Mosq.mosquitto_message) callconv(.C) void {
             _ = mosq;
-            const self = @ptrCast(*Self, @alignCast(@alignOf(*Self), self_ptr.?));
+            const self = @as(*Self, @ptrCast(@alignCast(self_ptr.?)));
             const topic = msg.*.topic[0..std.mem.len(msg.*.topic)];
             // std.log.info("message: {s}", .{topic});
-            const payload = @ptrCast([*]u8, msg.*.payload.?)[0..@intCast(usize, msg.*.payloadlen)];
+            const payload = @as([*]u8,@ptrCast(msg.*.payload.?))[0..@as(usize, @intCast(msg.*.payloadlen))];
             self.msg_callback(self.user, topic, payload);
         }
 
@@ -231,7 +231,7 @@ pub fn Client(comptime T: type) type {
         }
 
         pub fn publish(self: *Self, topic: [:0]u8, msg: []u8) bool {
-            const rc = Mosq.mosquitto_publish(self.mosq, null, topic.ptr, @intCast(c_int, msg.len), msg.ptr, 0, false);
+            const rc = Mosq.mosquitto_publish(self.mosq, null, topic.ptr, @as(c_int, @intCast(msg.len)), msg.ptr, 0, false);
             return rc == Mosq.MOSQ_ERR_SUCCESS;
         }
     };
