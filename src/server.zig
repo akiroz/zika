@@ -101,9 +101,9 @@ pub const Server = struct {
         try self.ip_cache.put(id, next_addr);
         try self.id_cache.put(next_addr, id);
 
-        var b64_id = try self.alloc.alloc(u8, self.b64_len);
+        const b64_id = try self.alloc.alloc(u8, self.b64_len);
         defer self.alloc.free(b64_id);
-        var id_bytes = std.mem.toBytes(id)[0..self.id_len];
+        const id_bytes = std.mem.toBytes(id)[0..self.id_len];
         _ = Base64UrlEncoder.encode(b64_id, id_bytes);
         const topic = try std.fmt.allocPrintZ(self.alloc, "{s}/{s}", .{ self.topic_cstr, b64_id });
         try self.topic_cache.put(next_addr, topic);
