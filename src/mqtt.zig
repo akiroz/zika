@@ -58,7 +58,7 @@ pub fn Client(comptime T: type) type {
             self.arena = ArenaAllocator.init(parent_alloc);
             self.alloc = self.arena.allocator();
             self.conf = conf;
-            self.host_cstr = try std.cstr.addNullByte(self.alloc, conf.host);
+            self.host_cstr = try self.alloc.dupeZ(u8, conf.host);
             self.subs_count = 0;
             self.subs = try self.alloc.alloc([:0]u8, max_subs);
             self.user = user;
@@ -83,8 +83,8 @@ pub fn Client(comptime T: type) type {
             if (opts.username) |username| {
                 rc = Mosq.mosquitto_username_pw_set(
                     self.mosq,
-                    (try std.cstr.addNullByte(self.alloc, username)).ptr,
-                    if (opts.password) |p| (try std.cstr.addNullByte(self.alloc, p)).ptr else null
+                    (try self.alloc.dupeZ(u8, username)).ptr,
+                    if (opts.password) |p| (try self.alloc.dupeZ(u8, p)).ptr else null
                 );
                 if (rc != Mosq.MOSQ_ERR_SUCCESS) {
                     std.log.err("mosquitto_username_pw_set: {s}", .{Mosq.mosquitto_strerror(rc)});
@@ -95,10 +95,10 @@ pub fn Client(comptime T: type) type {
             if (opts.ca_file != null or opts.cert_file != null) {
                 rc = Mosq.mosquitto_tls_set(
                     self.mosq,
-                    if (opts.ca_file) |ca| (try std.cstr.addNullByte(self.alloc, ca)).ptr else null,
+                    if (opts.ca_file) |ca| (try self.alloc.dupeZ(u8, ca)).ptr else null,
                     null, // capath
-                    if (opts.cert_file) |cert| (try std.cstr.addNullByte(self.alloc, cert)).ptr else null,
-                    if (opts.key_file) |key| (try std.cstr.addNullByte(self.alloc, key)).ptr else null,
+                    if (opts.cert_file) |cert| (try self.alloc.dupeZ(u8, cert)).ptr else null,
+                    if (opts.key_file) |key| (try self.alloc.dupeZ(u8, key)).ptr else null,
                     null // pw_callback
                 );
                 if (rc != Mosq.MOSQ_ERR_SUCCESS) {

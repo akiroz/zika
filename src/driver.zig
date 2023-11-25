@@ -48,7 +48,7 @@ fn PcapDriver(comptime T: type) type {
             self.handler = handler;
             self.pcap_header = .{ 2, 0, 0, 0 };
 
-            const interface = try std.cstr.addNullByte(alloc, pcap_conf.interface);
+            const interface = try alloc.dupeZ(u8, pcap_conf.interface);
             var pcap_err = std.mem.zeroes([Pcap.PCAP_ERRBUF_SIZE]u8);
             const pcap = Pcap.pcap_create(@as([*c]const u8, @ptrCast(interface)), &pcap_err) orelse {
                 std.log.err("pcap_create: {s}", .{pcap_err});
@@ -65,7 +65,7 @@ fn PcapDriver(comptime T: type) type {
             }
 
             const filter_spec = try std.fmt.allocPrint(alloc, "ip and not dst host {s}", .{conf.driver.local_addr});
-            const filter_cstr = try std.cstr.addNullByte(alloc, filter_spec);
+            const filter_cstr = try alloc.dupeZ(u8, filter_spec);
             var filter: Pcap.bpf_program = undefined;
             if (Pcap.pcap_compile(pcap, &filter, @as([*c]const u8, @ptrCast(filter_cstr)), 1, Pcap.PCAP_NETMASK_UNKNOWN) < 0) {
                 std.log.err("pcap_compile: {s}", .{Pcap.pcap_geterr(pcap)});

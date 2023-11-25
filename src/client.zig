@@ -47,10 +47,10 @@ pub fn Tunnel(comptime T: type) type {
             const b64_id = try alloc.alloc(u8, b64_len);
             _ = Base64UrlEncoder.encode(b64_id, self.id);
 
-            self.up_topic_cstr = try std.cstr.addNullByte(alloc, conf.topic);
-            
+            self.up_topic_cstr = try alloc.dupeZ(u8, conf.topic);
+
             const dn_topic = try std.fmt.allocPrint(alloc, "{s}/{s}", .{conf.topic, b64_id});
-            self.dn_topic_cstr = try std.cstr.addNullByte(alloc, dn_topic);
+            self.dn_topic_cstr = try alloc.dupeZ(u8, dn_topic);
             try self.mqtt.subscribe(self.dn_topic_cstr, true);
             
             std.log.info("Tunnel: {s} -> {s} ({s})", .{conf.bind_addr, conf.topic, b64_id});

@@ -58,7 +58,7 @@ pub const Server = struct {
         self.ip_cache = IpCache.init(self.alloc);
         self.id_cache = IdCache.init(self.alloc);
         self.b64_len = Base64UrlEncoder.calcSize(self.id_len);
-        self.topic_cstr = try std.cstr.addNullByte(self.alloc, server_conf.topic);
+        self.topic_cstr = try self.alloc.dupeZ(u8, server_conf.topic);
         self.topic_cache = TopicCache.init(self.alloc);
 
         std.log.info("== Server Config =================================", .{});
