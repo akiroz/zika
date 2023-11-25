@@ -5,18 +5,18 @@ const Compile = std.Build.Step.Compile;
 fn commonOpts(exe: *Compile) *Compile {
     if (builtin.target.isDarwin()) { // macOS
         if (builtin.cpu.arch == .aarch64) { // Apple
-            exe.addIncludePath("/opt/homebrew/include");
-            exe.addLibraryPath("/opt/homebrew/lib");
+            exe.addIncludePath(.{ .path = "/opt/homebrew/include"});
+            exe.addLibraryPath(.{ .path = "/opt/homebrew/lib"});
         } else { // Intel
-            exe.addIncludePath("/usr/local/include");
-            exe.addLibraryPath("/usr/local/lib");
+            exe.addIncludePath(.{ .path = "/usr/local/include"});
+            exe.addLibraryPath(.{ .path = "/usr/local/lib"});
         }
         exe.linkSystemLibrary("pcap");
     } else { // Linux
-        exe.addIncludePath("/usr/include");
-        exe.addIncludePath("/usr/include/x86_64-linux-gnu");
-        exe.addLibraryPath("/usr/lib");
-        exe.addLibraryPath("/usr/lib/x86_64-linux-gnu");
+        exe.addIncludePath(.{ .path = "/usr/include"});
+        exe.addIncludePath(.{ .path = "/usr/include/x86_64-linux-gnu"});
+        exe.addLibraryPath(.{ .path = "/usr/lib"});
+        exe.addLibraryPath(.{ .path = "/usr/lib/x86_64-linux-gnu"});
         exe.linkLibC();
     }
     exe.linkSystemLibrary("mosquitto");
