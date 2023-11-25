@@ -65,8 +65,8 @@ pub const Server = struct {
         std.log.info("ID Length: {d}", .{server_conf.id_length});
         std.log.info("Topic: {s}", .{server_conf.topic});
         std.log.info("IP Pool: {s} - {s}", .{ server_conf.pool_start, server_conf.pool_end });
-        self.ifce = try NetInterface(*Self).init(self.alloc, conf, self, @ptrCast(driver.PacketHandler(*Self), &up));
-        self.mqtt = try Mqtt(*Self).init(self.alloc, conf, self, @ptrCast(mqtt.PacketHandler(*Self), &down), 1);
+        self.ifce = try NetInterface(*Self).init(self.alloc, conf, self, @ptrCast(&up));
+        self.mqtt = try Mqtt(*Self).init(self.alloc, conf, self, @as(mqtt.PacketHandler(*Self), @ptrCast(&down)), 1);
         try self.mqtt.?.subscribe(self.topic_cstr, true);
         std.log.info("==================================================", .{});
 
@@ -114,7 +114,7 @@ pub const Server = struct {
     }
 
     fn up(self: *Self, pkt: [] align(@alignOf(IpHeader)) u8) void {
-        const hdr = @ptrCast(*IpHeader, pkt);
+        const hdr = @as(*IpHeader, @ptrCast(pkt));
         if (self.topic_cache.get(hdr.dst)) |topic| {
             self.mqtt.?.send(topic, pkt) catch |err| {
                 std.log.warn("up: {}", .{err});
@@ -125,13 +125,12 @@ pub const Server = struct {
     fn down(self: *Self, topic: []const u8, msg: [] align(@alignOf(IpHeader)) u8) void {
         _ = topic;
         var id: u128 = 0;
-        std.mem.copy(u8, @ptrCast(*[@sizeOf(u128)]u8, &id), msg[0..self.id_len]);
+        std.mem.copy(u8, @as(*[@sizeOf(u128)]u8, @ptrCast(&id)), msg[0..self.id_len]);
         const addr = self.ip_cache.get(id) orelse self.allocIp(id) catch |err| {
             std.log.err("allocIp: {any}", .{err});
             @panic("allocIp failed");
         };
-        const alignedSlice = @alignCast(@alignOf(IpHeader), msg[self.id_len..]);
-        self.ifce.?.inject(addr, alignedSlice) catch |err| {
+        self.ifce.?.inject(addr, @alignCast(msg[self.id_len..])) catch |err| {
             std.log.warn("down: {}", .{err});
         };
     }

@@ -58,7 +58,7 @@ pub fn Tunnel(comptime T: type) type {
         }
 
         pub fn up(self: *Self, pkt: [] align(@alignOf(IpHeader)) u8) !bool {
-            const hdr = @ptrCast(*IpHeader, pkt);
+            const hdr = @as(*IpHeader, @ptrCast(pkt));
             if(hdr.dst != self.bind_addr) return false;
             const payload = try self.alloc.alloc(u8, self.id.len + pkt.len);
             defer self.alloc.free(payload);
@@ -105,9 +105,9 @@ pub const Client = struct {
         errdefer self.deinit();
 
         std.log.info("== Client Config =================================", .{});
-        self.ifce = try NetInterface(*Self).init(self.alloc, conf, self, @ptrCast(driver.PacketHandler(*Self), &up));
+        self.ifce = try NetInterface(*Self).init(self.alloc, conf, self, @ptrCast(&up));
         const max_subs = client_conf.tunnels.len;
-        self.mqtt = try Mqtt(*Self).init(self.alloc, conf, self, @ptrCast(mqtt.PacketHandler(*Self), &down), max_subs);
+        self.mqtt = try Mqtt(*Self).init(self.alloc, conf, self, @ptrCast(&down), max_subs);
         self.tunnels = try self.alloc.alloc(*Tunnel(*Self), client_conf.tunnels.len);
         for (client_conf.tunnels, 0..) |tunnel, idx| {
             self.tunnels[idx] = try Tunnel(*Self).create(

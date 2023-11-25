@@ -50,7 +50,7 @@ fn PcapDriver(comptime T: type) type {
 
             const interface = try std.cstr.addNullByte(alloc, pcap_conf.interface);
             var pcap_err = std.mem.zeroes([Pcap.PCAP_ERRBUF_SIZE]u8);
-            const pcap = Pcap.pcap_create(@ptrCast([*c]const u8, interface), &pcap_err) orelse {
+            const pcap = Pcap.pcap_create(@as([*c]const u8, @ptrCast(interface)), &pcap_err) orelse {
                 std.log.err("pcap_create: {s}", .{pcap_err});
                 return Error.CreateFailed;
             };
@@ -67,7 +67,7 @@ fn PcapDriver(comptime T: type) type {
             const filter_spec = try std.fmt.allocPrint(alloc, "ip and not dst host {s}", .{conf.driver.local_addr});
             const filter_cstr = try std.cstr.addNullByte(alloc, filter_spec);
             var filter: Pcap.bpf_program = undefined;
-            if (Pcap.pcap_compile(pcap, &filter, @ptrCast([*c]const u8, filter_cstr), 1, Pcap.PCAP_NETMASK_UNKNOWN) < 0) {
+            if (Pcap.pcap_compile(pcap, &filter, @as([*c]const u8, @ptrCast(filter_cstr)), 1, Pcap.PCAP_NETMASK_UNKNOWN) < 0) {
                 std.log.err("pcap_compile: {s}", .{Pcap.pcap_geterr(pcap)});
                 return Error.CompileFilterFailed;
             }
@@ -88,7 +88,7 @@ fn PcapDriver(comptime T: type) type {
 
         pub fn run(self: *Self) !void {
             if (self.pcap) |pcap| {
-                if (Pcap.pcap_loop(pcap, -1, recv, @ptrCast([*c]u8, self)) == Pcap.PCAP_ERROR) {
+                if (Pcap.pcap_loop(pcap, -1, recv, @as([*c]u8, @ptrCast(self))) == Pcap.PCAP_ERROR) {
                     std.log.err("pcap_loop: {s}", .{Pcap.pcap_geterr(pcap)});
                     return Error.ReadFailed;
                 }
@@ -98,7 +98,7 @@ fn PcapDriver(comptime T: type) type {
         }
 
         fn recv(self_ptr: [*c]u8, hdr: [*c]const Pcap.pcap_pkthdr, pkt: [*c]const u8) callconv(.C) void {
-            const self = @ptrCast(*Self, @alignCast(@alignOf(*Self), self_ptr.?));
+            const self = @as(*Self, @ptrCast(@alignCast(self_ptr.?)));
             self.handler(self.user, pkt[4..hdr.*.len]);
         }
 
@@ -264,16 +264,16 @@ pub fn NetInterface(comptime T: type) type {
 
         fn cksum(buf: []align(@alignOf(u16)) u8, carry: u32) !u16 {
             var sum: u32 = carry;
-            const buf16: []u16 = @ptrCast([*]u16, buf.ptr)[0 .. buf.len / 2];
+            const buf16: []u16 = @as([*]u16, @ptrCast(buf.ptr))[0 .. buf.len / 2];
             for (buf16) |word| sum += word;
             if (buf.len % 2 == 1) sum += buf[buf.len - 1];
             while (sum > 0xffff) sum = (sum & 0xffff) + (sum >> 16);
-            return @truncate(u16, sum ^ 0xffff);
+            return @truncate(sum ^ 0xffff);
         }
 
         pub fn inject(self: *Self, src: u32, pkt: []align(@alignOf(IpHeader)) u8) !void {
-            const hdr = @ptrCast(*IpHeader, pkt);
-            const payload_offset = @intCast(u16, hdr.ihl) * 4;
+            const hdr = @as(*IpHeader, @ptrCast(pkt));
+            const payload_offset = @as(u16, @intCast(hdr.ihl)) * 4;
             hdr.src = src;
             hdr.dst = self.local_ip;
             hdr.cksum = 0; // Zero before recalc
@@ -281,18 +281,18 @@ pub fn NetInterface(comptime T: type) type {
             switch (hdr.proto) {
                 6, 17 => { // TCP / UDP
                     var pseudo_buf align(@alignOf(IpHeader)) = std.mem.zeroes([@sizeOf(PseudoHeader) / 2]u16);
-                    const pseudo_hdr = @ptrCast(*PseudoHeader, &pseudo_buf);
+                    const pseudo_hdr = @as(*PseudoHeader, @ptrCast(&pseudo_buf));
                     pseudo_hdr.src = src;
                     pseudo_hdr.dst = self.local_ip;
                     pseudo_hdr.proto = hdr.proto;
-                    pseudo_hdr.len = std.mem.nativeToBig(u16, @intCast(u16, pkt.len) - payload_offset);
+                    pseudo_hdr.len = std.mem.nativeToBig(u16, @as(u16, @intCast(pkt.len)) - payload_offset);
                     var pseudo_sum: u32 = 0;
                     for (pseudo_buf) |word| pseudo_sum += word;
                     const cksum_offset = payload_offset + if (hdr.proto == 6) @as(usize, 16) else 6;
                     const cksum_slice = pkt[cksum_offset .. cksum_offset + 2];
                     @memset(cksum_slice, 0); // Zero before recalc
-                    var sum = try cksum(@alignCast(2, pkt[payload_offset..]), pseudo_sum);
-                    @memcpy(cksum_slice, @ptrCast(*[2]u8, &sum));
+                    var sum = try cksum(@alignCast(pkt[payload_offset..]), pseudo_sum);
+                    @memcpy(cksum_slice, @as(*[2]u8, @ptrCast(&sum)));
                 },
                 else => {}, // No special handling
             }
