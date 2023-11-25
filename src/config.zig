@@ -73,13 +73,12 @@ pub fn get(alloc: Allocator, file: []u8) !Config {
         std.log.err("Failed to open {s}: {any}", .{ file, err });
         return Error.MissingConfig;
     };
-    var json_stream = std.json.TokenStream.init(cfg_file);
 
-    @setEvalBranchQuota(2000);
-    return try std.json.parse(Config, &json_stream, .{
-        .allocator = alloc,
-        .duplicate_field_behavior = .UseLast,
+    const parsed = try std.json.parseFromSlice(Config, alloc, cfg_file, .{
+        .duplicate_field_behavior = .use_last,
         .ignore_unknown_fields = true,
-        .allow_trailing_data = true,
+        .allocate = .alloc_always,
     });
+    const result = parsed.value;
+    return result;
 }
