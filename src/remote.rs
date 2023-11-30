@@ -116,6 +116,25 @@ impl Remote {
         }
     }
 
+    pub async fn subscribe(&self, topic: String) -> Result<(), mqtt::ClientError> {
+        let mut subs = self.subs.lock().await;
+        if subs.contains(&topic) { return Ok(()) };
+        for (idx, client) in self.clients.iter().enumerate() {
+            let res = client
+                .mqttc
+                .subscribe(topic.clone(), QoS::AtMostOnce)
+                .await;
+            if res.is_ok() {
+                subs.push(topic);
+                return Ok(());
+            }
+            if idx == self.clients.len() - 1 {
+                return res;
+            }
+        }
+        unreachable!()
+    }
+
     pub async fn publish(&self, topic: String, payload: Vec<u8>) -> Result<(), mqtt::ClientError> {
         if self.clients.len() == 1 {
             return self.clients[0]
