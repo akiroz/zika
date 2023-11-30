@@ -1,16 +1,19 @@
+use core::time::Duration;
+use rand::distributions::Alphanumeric;
+use rand::{thread_rng, Rng};
 use serde::Deserialize;
 use std::fs;
 
 #[derive(Deserialize, Debug)]
 pub struct MqttOptions {
     #[serde(default = "default_keepalive_interval")]
-    pub keepalive_interval: u16,
+    pub keepalive_interval: u64,
 
     #[serde(default = "default_reconnect_interval_min")]
-    pub reconnect_interval_min: u16,
+    pub reconnect_interval_min: u64,
 
     #[serde(default = "default_reconnect_interval_max")]
-    pub reconnect_interval_max: u16,
+    pub reconnect_interval_max: u64,
 
     pub username: Option<String>,
     pub password: Option<String>,
@@ -23,15 +26,15 @@ pub struct MqttOptions {
     pub cert_file: Option<String>,
 }
 
-fn default_keepalive_interval() -> u16 {
+fn default_keepalive_interval() -> u64 {
     return 60;
 }
 
-fn default_reconnect_interval_min() -> u16 {
+fn default_reconnect_interval_min() -> u64 {
     return 1;
 }
 
-fn default_reconnect_interval_max() -> u16 {
+fn default_reconnect_interval_max() -> u64 {
     return 60;
 }
 
@@ -114,6 +117,44 @@ pub enum ConfigError {
 pub fn read_from_default_location() -> Result<Config, ConfigError> {
     let text = fs::read_to_string("zika_config.json").map_err(ConfigError::IOError)?;
     let deserialized: Config = serde_json::from_str(&text).map_err(ConfigError::DecodeError)?;
-    println!("deserialized = {:?}", deserialized);
     return Ok(deserialized);
+}
+
+impl MqttBroker {
+    pub fn to_mqtt_options(&self) -> rumqttc::v5::MqttOptions {
+        let mut rng = thread_rng();
+        let random_id: String = (&mut rng)
+            .sample_iter(Alphanumeric)
+            .take(7)
+            .map(char::from)
+            .collect();
+        let mut options = rumqttc::v5::MqttOptions::new(random_id, &self.host, self.port);
+        options.set_topic_alias_max(Some(5));
+        // TODO: more options
+        match &self.options {
+            None => {}
+            Some(opts) => {
+                options.set_keep_alive(Duration::new(opts.keepalive_interval, 0));
+
+                match (&opts.username, &opts.password) {
+                    (Some(u), Some(p)) => {
+                        options.set_credentials(u, p);
+                    }
+                    _ => {}
+                };
+            }
+        };
+        return options;
+    }
+}
+
+impl Config {
+    pub fn broker_mqtt_options(&self) -> Vec<rumqttc::v5::MqttOptions> {
+        return self
+            .mqtt
+            .brokers
+            .iter()
+            .map(|s| s.to_mqtt_options())
+            .collect::<Vec<_>>();
+    }
 }
