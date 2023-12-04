@@ -1,6 +1,6 @@
 use env_logger;
 use zika::config::read_from_default_location;
-use zika::Server;
+use zika::server::Server;
 
 #[tokio::main]
 async fn main() {
