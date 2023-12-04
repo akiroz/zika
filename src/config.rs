@@ -75,21 +75,21 @@ pub struct DriverConfig {
 #[derive(Deserialize, Debug)]
 pub struct ServerConfig {
     #[serde(default = "default_id_length")]
-    pub id_length: u8,
+    pub id_length: usize,
 
     pub topic: String,
     pub pool_start: String,
     pub pool_end: String,
 }
 
-fn default_id_length() -> u8 {
+fn default_id_length() -> usize {
     return 4;
 }
 
 #[derive(Deserialize, Debug)]
 pub struct ClientTunnel {
     #[serde(default = "default_id_length")]
-    pub id_length: u8,
+    pub id_length: usize,
 
     pub topic: String,
     pub bind_addr: String,
