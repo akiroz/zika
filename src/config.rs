@@ -131,18 +131,12 @@ impl MqttBroker {
         let mut options = rumqttc::v5::MqttOptions::new(random_id, &self.host, self.port);
         options.set_topic_alias_max(Some(5));
         // TODO: more options
-        match &self.options {
-            None => {}
-            Some(opts) => {
-                options.set_keep_alive(Duration::new(opts.keepalive_interval, 0));
+        if let Some(opts) = &self.options {
+            options.set_keep_alive(Duration::new(opts.keepalive_interval, 0));
 
-                match (&opts.username, &opts.password) {
-                    (Some(u), Some(p)) => {
-                        options.set_credentials(u, p);
-                    }
-                    _ => {}
-                };
-            }
+            if let (Some(u), Some(p)) = (&opts.username, &opts.password) {
+                options.set_credentials(u, p);
+            };
         };
         return options;
     }
