@@ -9,9 +9,9 @@ impl Server {
     pub fn new(config: config::Config) -> Self {
         let mqtt_options = config.broker_mqtt_options();
         let server_config = config.server.expect("Server config to be non-null");
-        Self {
-            remote: remote::Remote::new(&mqtt_options, server_config.topic),
-        }
+
+        let remote = remote::Remote::new(&mqtt_options, vec![server_config.topic]);
+        Self { remote: remote }
     }
 
     pub async fn run(&mut self) {

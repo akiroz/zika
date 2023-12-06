@@ -23,9 +23,9 @@ pub struct Remote {
 }
 
 impl Remote {
-    pub fn new(broker_opts: &Vec<mqtt::MqttOptions>, topic: String) -> Self {
+    pub fn new(broker_opts: &Vec<mqtt::MqttOptions>, topics: Vec<String>) -> Self {
         let (sender, receiver) = mpsc::channel(128);
-        let subs = Arc::new(Mutex::new(vec![topic]));
+        let subs = Arc::new(Mutex::new(topics));
         let mut remote = Self {
             clients: Vec::with_capacity(broker_opts.len()),
             subs: subs.clone(),
@@ -134,7 +134,7 @@ impl Remote {
         unreachable!()
     }
 
-    pub async fn publish(&self, topic: String, payload: Vec<u8>) -> Result<(), mqtt::ClientError> {
+    pub async fn publish(&self, topic: &String, payload: Vec<u8>) -> Result<(), mqtt::ClientError> {
         if self.clients.len() == 1 {
             return self.clients[0]
                 .mqttc
