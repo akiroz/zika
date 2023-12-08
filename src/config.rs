@@ -9,12 +9,6 @@ pub struct MqttOptions {
     #[serde(default = "default_keepalive_interval")]
     pub keepalive_interval: u64,
 
-    #[serde(default = "default_reconnect_interval_min")]
-    pub reconnect_interval_min: u64,
-
-    #[serde(default = "default_reconnect_interval_max")]
-    pub reconnect_interval_max: u64,
-
     pub username: Option<String>,
     pub password: Option<String>,
 
@@ -56,11 +50,6 @@ pub struct MqttConfig {
 }
 
 #[derive(Deserialize, Debug)]
-pub struct DriverPcap {
-    pub interface: String,
-}
-
-#[derive(Deserialize, Debug)]
 pub struct DriverTun {
     pub netmask: String,
 }
@@ -68,7 +57,6 @@ pub struct DriverTun {
 #[derive(Deserialize, Debug)]
 pub struct DriverConfig {
     pub local_addr: String,
-    pub pcap: Option<DriverPcap>,
     pub tun: Option<DriverTun>,
 }
 
