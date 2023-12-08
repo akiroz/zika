@@ -1,47 +1,66 @@
-use log;
 use bytes::Bytes;
-use tokio::{task, sync::mpsc};
-use rumqttc::v5::{self as mqtt, mqttbytes::{v5::Packet, QoS}};
+use log;
+use rumqttc::v5::{
+    self as mqtt,
+    mqttbytes::{v5::Packet, QoS},
+};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tokio::{sync::mpsc, task};
 
 use crate::lookup_pool::LookupPool;
 
 struct RemoteClient {
     nth: usize,
-    mqttc: mqtt::AsyncClient,
-    mqttev: mqtt::EventLoop,
-    alias: LookupPool<String, u16>,
-    sender: mpsc::Sender<(String, Bytes)>,
+    mqttc: Arc<mqtt::AsyncClient>,
+    // alias: LookupPool<String, u16>,
 }
 
-struct Remote {
+pub struct Remote {
     clients: Vec<RemoteClient>,
     receiver: mpsc::Receiver<(String, Bytes)>,
-    subs: Vec<String>,
+    subs: Arc<Mutex<Vec<String>>>,
 }
 
 impl Remote {
-    pub fn new(broker_opts: &Vec<mqtt::MqttOptions>) -> Self {
+    pub fn new(broker_opts: &Vec<mqtt::MqttOptions>, topics: Vec<String>) -> Self {
         let (sender, receiver) = mpsc::channel(128);
+        let subs = Arc::new(Mutex::new(topics));
         let mut remote = Self {
             clients: Vec::with_capacity(broker_opts.len()),
-            subs: Vec::new(),
+            subs: subs.clone(),
             receiver,
-        }; 
+        };
         for (idx, opt) in broker_opts.iter().enumerate() {
-            let (mqtt_client, event_loop) = mqtt::AsyncClient::new(opt.clone(), 128);
-            let mut remote_client = RemoteClient {
+            let (mqtt_client, mut event_loop) = mqtt::AsyncClient::new(opt.clone(), 128);
+            let arc_mqtt_client = Arc::new(mqtt_client);
+            let remote_client = RemoteClient {
                 nth: idx,
-                mqttc: mqtt_client,
-                mqttev: event_loop,
-                alias: LookupPool::new(0..opt.topic_alias_max().unwrap_or(0)),
-                sender: sender.clone(),
+                mqttc: arc_mqtt_client.clone(),
+                // alias: LookupPool::new(0..opt.topic_alias_max().unwrap_or(2)),
             };
+            let loop_sender = sender.clone();
+            let loop_mqtt_client = arc_mqtt_client.clone();
+            let loop_subs = subs.clone();
             task::spawn(async move {
                 loop {
                     use mqtt::Event::Incoming;
-                    match remote_client.mqttev.poll().await {
-                        Ok(Incoming(pkt)) => Self::handle_packet(&mut remote_client, pkt),
-                        _ => continue,
+                    match event_loop.poll().await {
+                        Ok(Incoming(pkt)) => {
+                            log::debug!("Received Incoming Packet {:?}", pkt);
+                            Self::handle_packet(
+                                &loop_mqtt_client,
+                                idx,
+                                loop_sender.clone(),
+                                pkt,
+                                loop_subs.clone(),
+                            )
+                            .await;
+                        }
+                        x => {
+                            log::debug!("Received Other Packet {:?}", x);
+                            continue;
+                        }
                     };
                 }
             });
@@ -50,51 +69,89 @@ impl Remote {
         remote
     }
 
-    async fn handle_packet(client: &mut RemoteClient, pkt: Packet, subs: &Vec<String>) {
-        use mqtt::mqttbytes::v5::{ConnAck, Publish, Filter, ConnectReturnCode::Success};
+    async fn handle_packet(
+        mqtt_client: &mqtt::AsyncClient,
+        nth: usize,
+        sender: mpsc::Sender<(String, Bytes)>,
+        pkt: Packet,
+        subs_m: Arc<Mutex<Vec<String>>>,
+    ) {
+        use mqtt::mqttbytes::v5::{ConnAck, ConnectReturnCode::Success, Filter, Publish};
         match pkt {
-            Packet::ConnAck(ConnAck { code: Success, properties: Some(prop), session_present }) => {
-                if let Some(alias_max) = prop.topic_alias_max {
-                    log::info!("broker[{}] alias resize({})", client.nth, alias_max);
-                    client.alias.resize(0..alias_max);
-                }
+            Packet::ConnAck(ConnAck {
+                code: Success,
+                properties: Some(prop),
+                session_present,
+            }) => {
+                // if let Some(alias_max) = prop.topic_alias_max {
+                //     log::info!("broker[{}] alias resize({})", nth, alias_max);
+                //     client.alias.resize(0..alias_max);
+                // }
                 if !session_present {
-                    log::info!("broker[{}] !session_present", client.nth);
-                    let subs = subs.iter().map(|path| Filter {
+                    log::info!("broker[{}] !session_present", nth);
+                    let subs_v = subs_m.lock().await;
+                    let subs = subs_v.iter().map(|path| Filter {
                         path: path.clone(),
                         qos: QoS::AtMostOnce,
                         nolocal: false,
                         preserve_retain: false,
                         retain_forward_rule: Default::default(),
                     });
-                    if let Err(err) = client.mqttc.subscribe_many(subs).await {
-                        log::info!("broker[{}] subscribe_many {:?}", client.nth, err);
-
-                    } 
+                    if let Err(err) = mqtt_client.subscribe_many(subs).await {
+                        log::info!("broker[{}] subscribe_many {:?}", nth, err);
+                    }
                 }
-            },
+            }
             Packet::ConnAck(ConnAck { code, .. }) => {
                 panic!("Refused by broker: {:?}", code);
-            },
+            }
             Packet::Publish(Publish { topic, payload, .. }) => {
                 if let Ok(topic) = String::from_utf8(topic.to_vec()) {
-                    let _ = client.sender.send((topic, payload));
+                    _ = sender.send((topic, payload)).await; // What if it's not ok?
                 } else {
                     log::debug!("drop packet, non utf8 topic: {:?}", topic);
                 }
-            },
-            _ => ()
+            }
+            _ => (),
         }
     }
 
-    pub async fn publish(&self, topic: String, payload: Vec<u8>) -> Result<(), mqtt::ClientError> {
+    pub async fn subscribe(&self, topic: String) -> Result<(), mqtt::ClientError> {
+        let mut subs = self.subs.lock().await;
+        if subs.contains(&topic) {
+            return Ok(());
+        };
+        for (idx, client) in self.clients.iter().enumerate() {
+            let res = client.mqttc.subscribe(topic.clone(), QoS::AtMostOnce).await;
+            if res.is_ok() {
+                subs.push(topic);
+                return Ok(());
+            }
+            if idx == self.clients.len() - 1 {
+                return res;
+            }
+        }
+        unreachable!()
+    }
+
+    pub async fn publish(&self, topic: &String, payload: Vec<u8>) -> Result<(), mqtt::ClientError> {
         if self.clients.len() == 1 {
-            return self.clients[0].mqttc.publish(topic, QoS::AtMostOnce, false, payload).await
+            return self.clients[0]
+                .mqttc
+                .publish(topic, QoS::AtMostOnce, false, payload)
+                .await;
         }
         for (idx, client) in self.clients.iter().enumerate() {
-            let res = client.mqttc.publish(topic.clone(), QoS::AtMostOnce, false, payload.clone()).await;
-            if res.is_ok() { return Ok(()) }
-            if idx == self.clients.len() - 1 { return res }
+            let res = client
+                .mqttc
+                .publish(topic.clone(), QoS::AtMostOnce, false, payload.clone())
+                .await;
+            if res.is_ok() {
+                return Ok(());
+            }
+            if idx == self.clients.len() - 1 {
+                return res;
+            }
         }
         unreachable!()
     }
