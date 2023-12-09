@@ -16,7 +16,6 @@ pub struct Client {
     remote: Arc<remote::Remote>,
 }
 
-#[derive(Clone)]
 struct Tunnel {
     id: Vec<u8>,
     topic: String,
@@ -27,7 +26,7 @@ impl Client {
     pub async fn new(config: &config::Config) -> Self {
         let mqtt_options = config.broker_mqtt_options();
 
-        let remote = remote::Remote::new(&mqtt_options, Vec::new());
+        let (remote, _) = remote::Remote::new(&mqtt_options, Vec::new());
         let arc_remote = Arc::new(remote);
 
         let client_config = config
