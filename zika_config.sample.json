@@ -23,10 +23,9 @@
       { "host": "localhost", "port": 1883, "options": { "keepalive_interval": 30 } }
     ]
   },
-  
+
   "driver": {
     "local_addr": "172.20.0.1",
-    "pcap": { "interface": "lo0" },
     "tun": { "netmask": "255.255.255.0" }
   },
 
@@ -37,8 +36,9 @@
     "// In bytes (Optional, default shown, must match client)": "",
     "id_length": 4,
     "topic": "zika/OjFcZWEAGy2E3Vkh",
-    "pool_start": "172.20.0.100",
-    "pool_end": "172.20.0.200"
+    "// The follow ip is used with driver.tun.netmask to create a tunnel":"",
+    "// please make sure driver.local_addr is within the subnet":"",
+    "bind_addr": "172.20.0.0",
   },
 
   "client": {

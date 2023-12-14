@@ -4,6 +4,7 @@ use etherparse::Ipv4Header;
 use futures::stream::SplitSink;
 use futures::stream::StreamExt;
 use futures::SinkExt;
+use ipnetwork::Ipv4Network;
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use std::io::{Cursor, Write};
@@ -56,6 +57,9 @@ impl Client {
         let dev = tun::create_as_async(&tun_config).expect("Tunnel");
         let (sink, mut stream) = dev.into_framed().split();
 
+        let ip_network =
+            Ipv4Network::with_netmask(config.driver.local_addr, config.driver.tun.netmask)
+                .expect("A proper ip network");
         let mqtt_options = config.broker_mqtt_options();
 
         let (remote, remote_receiver) = remote::Remote::new(&mqtt_options, Vec::new());
@@ -78,6 +82,10 @@ impl Client {
             let topic = format!("{topic_base}/{base64_id}");
             let bind_addr = client_tunnel_config.bind_addr;
 
+            if !ip_network.contains(bind_addr) {
+                log::error!("{:?} is outside of the subnet, skipping", bind_addr);
+                continue;
+            }
             log::info!("Binding {:?} to {:?}", &topic, &bind_addr);
 
             let subscribe_result = remote.subscribe(topic.clone()).await;
