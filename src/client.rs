@@ -70,7 +70,7 @@ impl Client {
 
         for client_tunnel_config in &client_config.tunnels {
             let random_id: Vec<u8> = (&mut rng)
-                .sample_iter(Standard)
+                .sample_iter(Alphanumeric)
                 .take(client_tunnel_config.id_length)
                 .collect();
             let base64_id = general_purpose::STANDARD.encode(&random_id);
