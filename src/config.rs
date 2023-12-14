@@ -3,6 +3,7 @@ use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use serde::Deserialize;
 use std::fs;
+use std::net::Ipv4Addr;
 
 #[derive(Deserialize, Debug)]
 pub struct MqttOptions {
@@ -21,14 +22,6 @@ pub struct MqttOptions {
 }
 
 fn default_keepalive_interval() -> u64 {
-    return 60;
-}
-
-fn default_reconnect_interval_min() -> u64 {
-    return 1;
-}
-
-fn default_reconnect_interval_max() -> u64 {
     return 60;
 }
 
@@ -51,13 +44,13 @@ pub struct MqttConfig {
 
 #[derive(Deserialize, Debug)]
 pub struct DriverTun {
-    pub netmask: String,
+    pub netmask: Ipv4Addr,
 }
 
 #[derive(Deserialize, Debug)]
 pub struct DriverConfig {
-    pub local_addr: String,
-    pub tun: Option<DriverTun>,
+    pub local_addr: Ipv4Addr,
+    pub tun: DriverTun,
 }
 
 #[derive(Deserialize, Debug)]
@@ -66,8 +59,7 @@ pub struct ServerConfig {
     pub id_length: usize,
 
     pub topic: String,
-    pub pool_start: String,
-    pub pool_end: String,
+    pub bind_addr: Ipv4Addr,
 }
 
 fn default_id_length() -> usize {
@@ -80,7 +72,7 @@ pub struct ClientTunnel {
     pub id_length: usize,
 
     pub topic: String,
-    pub bind_addr: String,
+    pub bind_addr: Ipv4Addr,
 }
 
 #[derive(Deserialize, Debug)]
