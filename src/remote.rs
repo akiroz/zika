@@ -8,8 +8,6 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::{sync::mpsc, task};
 
-use crate::lookup_pool::LookupPool;
-
 struct RemoteClient {
     nth: usize,
     mqttc: Arc<mqtt::AsyncClient>,
@@ -81,7 +79,7 @@ impl Remote {
         match pkt {
             Packet::ConnAck(ConnAck {
                 code: Success,
-                properties: Some(prop),
+                properties: Some(_prop),
                 session_present,
             }) => {
                 // if let Some(alias_max) = prop.topic_alias_max {
