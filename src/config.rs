@@ -43,23 +43,12 @@ pub struct MqttConfig {
 }
 
 #[derive(Deserialize, Debug)]
-pub struct DriverTun {
-    pub netmask: Ipv4Addr,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct DriverConfig {
-    pub local_addr: Ipv4Addr,
-    pub tun: DriverTun,
-}
-
-#[derive(Deserialize, Debug)]
 pub struct ServerConfig {
     #[serde(default = "default_id_length")]
     pub id_length: usize,
 
     pub topic: String,
-    pub bind_addr: Ipv4Addr,
+    pub bind_cidr: String,
 }
 
 fn default_id_length() -> usize {
@@ -77,13 +66,13 @@ pub struct ClientTunnel {
 
 #[derive(Deserialize, Debug)]
 pub struct ClientConfig {
+    pub bind_cidr: String,
     pub tunnels: Vec<ClientTunnel>,
 }
 
 #[derive(Deserialize, Debug)]
 pub struct Config {
     pub mqtt: MqttConfig,
-    pub driver: DriverConfig,
     pub server: Option<ServerConfig>,
     pub client: Option<ClientConfig>,
 }

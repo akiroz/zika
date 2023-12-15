@@ -1,22 +1,20 @@
 use base64::{engine::general_purpose, Engine as _};
 use bytes::Bytes;
 use etherparse::Ipv4Header;
-use futures::stream::SplitSink;
-use futures::stream::StreamExt;
+use futures::stream::{SplitSink, StreamExt};
 use futures::SinkExt;
 use ipnetwork::Ipv4Network;
-use rand::distributions::Alphanumeric;
+use rand::distributions::Standard;
 use rand::{thread_rng, Rng};
 use std::io::{Cursor, Write};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::{sync::mpsc, task};
 use tokio_util::codec::Framed;
-use tun::AsyncDevice;
-use tun::TunPacketCodec;
-use tun::{IntoAddress as _, TunPacket};
+use tun::{AsyncDevice, TunPacket, TunPacketCodec};
 
 use crate::config;
+use crate::ip_iter::SizedIpv4NetworkIterator;
 use crate::remote;
 
 type TunSink = SplitSink<Framed<AsyncDevice, TunPacketCodec>, TunPacket>;
@@ -37,15 +35,29 @@ struct Tunnel {
 
 impl Client {
     pub async fn new(config: &config::Config) -> Self {
+        let client_config = config
+            .client
+            .as_ref()
+            .expect("Client config to be non-null");
+
+        let ip_network: Ipv4Network = client_config
+            .bind_cidr
+            .parse()
+            .expect("A proper CIDR for ip network");
+        let local_addr = SizedIpv4NetworkIterator::new(ip_network)
+            .next()
+            .expect("A subnet large enough to have a local ip");
+
         log::info!(
-            "Creating tun at {:?} network {:?}",
-            config.driver.local_addr,
-            config.driver.tun.netmask
+            "Creating tun at {:?} netmask {:?} local {:?}",
+            ip_network.ip(),
+            ip_network.mask(),
+            local_addr
         );
         let mut tun_config = tun::Configuration::default();
-        tun_config.address(config.driver.local_addr);
-        tun_config.destination(config.driver.local_addr);
-        tun_config.netmask(config.driver.tun.netmask);
+        tun_config.address(local_addr);
+        tun_config.destination(local_addr);
+        tun_config.netmask(ip_network.mask());
 
         #[cfg(target_os = "linux")]
         tun_config.platform(|tun_config| {
@@ -57,17 +69,9 @@ impl Client {
         let dev = tun::create_as_async(&tun_config).expect("Tunnel");
         let (sink, mut stream) = dev.into_framed().split();
 
-        let ip_network =
-            Ipv4Network::with_netmask(config.driver.local_addr, config.driver.tun.netmask)
-                .expect("A proper ip network");
         let mqtt_options = config.broker_mqtt_options();
 
         let (remote, remote_receiver) = remote::Remote::new(&mqtt_options, Vec::new());
-
-        let client_config = config
-            .client
-            .as_ref()
-            .expect("Client config to be non-null");
 
         let mut tunnels = Vec::with_capacity(client_config.tunnels.len());
         let mut rng = thread_rng();
@@ -120,7 +124,7 @@ impl Client {
         Client {
             tunnels: arc_tunnels.clone(),
             remote_receiver,
-            local_addr: config.driver.local_addr.clone(),
+            local_addr,
             sink,
         }
     }

@@ -2,6 +2,7 @@ use crate::config;
 use crate::ip_iter::SizedIpv4NetworkIterator;
 use crate::lookup_pool::LookupPool;
 use crate::remote;
+
 use base64::{engine::general_purpose, Engine as _};
 use bytes::Bytes;
 use etherparse::Ipv4Header;
@@ -11,10 +12,10 @@ use ipnetwork::Ipv4Network;
 use std::io::{Cursor, Write};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
-use tokio::sync::Mutex;
-use tokio::{sync::mpsc, task};
+use tokio::sync::{mpsc, Mutex};
+use tokio::task;
 use tokio_util::codec::Framed;
-use tun::{AsyncDevice, IntoAddress as _, TunPacket, TunPacketCodec};
+use tun::{AsyncDevice, TunPacket, TunPacketCodec};
 
 type TunSink = SplitSink<Framed<AsyncDevice, TunPacketCodec>, TunPacket>;
 type IpPool = LookupPool<String, Ipv4Addr, SizedIpv4NetworkIterator>;
@@ -32,22 +33,29 @@ impl Server {
     pub fn new(config: config::Config) -> Self {
         let mqtt_options = config.broker_mqtt_options();
         let server_config = config.server.expect("Server config to be non-null");
-
         let (remote, remote_receiver) =
             remote::Remote::new(&mqtt_options, vec![server_config.topic.clone()]);
-        let netmask = config.driver.tun.netmask;
-        let ip_network = Ipv4Network::with_netmask(server_config.bind_addr, netmask)
-            .expect("A proper ip network");
-        let bind_addr = ip_network.ip();
 
-        log::info!("Binding to {:?} netmask {:?}", bind_addr, netmask);
+        let ip_network: Ipv4Network = server_config
+            .bind_cidr
+            .parse()
+            .expect("A proper CIDR for ip network");
+        let mut ip_iter = SizedIpv4NetworkIterator::new(ip_network);
+        let local_addr = ip_iter
+            .next()
+            .expect("A subnet large enough to have a local ip");
 
-        let ip_iter = SizedIpv4NetworkIterator::new(ip_network);
+        log::info!(
+            "Binding to {:?} netmask {:?} local {:?}",
+            ip_network.ip(),
+            ip_network.mask(),
+            local_addr
+        );
 
         let mut tun_config = tun::Configuration::default();
-        tun_config.address(bind_addr);
-        tun_config.destination(bind_addr);
-        tun_config.netmask(netmask);
+        tun_config.address(local_addr);
+        tun_config.destination(local_addr);
+        tun_config.netmask(ip_network.mask());
 
         #[cfg(target_os = "linux")]
         tun_config.platform(|tun_config| {
@@ -80,7 +88,7 @@ impl Server {
         Self {
             remote_receiver,
             topic: server_config.topic,
-            local_addr: config.driver.local_addr,
+            local_addr,
             id_length: server_config.id_length,
             ip_pool: ip_pool_arc,
             sink,

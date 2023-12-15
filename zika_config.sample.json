@@ -24,11 +24,6 @@
     ]
   },
 
-  "driver": {
-    "local_addr": "172.20.0.1",
-    "tun": { "netmask": "255.255.255.0" }
-  },
-
   "// NOTE: Tunnel ID and MQTT topic are prepended to all IP packets": "",
   "// Long IDs / topics will add significant overhead to traffic with many small packets": "",
 
@@ -36,12 +31,11 @@
     "// In bytes (Optional, default shown, must match client)": "",
     "id_length": 4,
     "topic": "zika/OjFcZWEAGy2E3Vkh",
-    "// The follow ip is used with driver.tun.netmask to create a tunnel":"",
-    "// please make sure driver.local_addr is within the subnet":"",
-    "bind_addr": "172.20.0.0",
+    "bind_cidr": "172.20.0.0/24",
   },
 
   "client": {
+    "bind_cidr": "172.20.0.0/24",
     "tunnels": [
       {
         "topic": "zika/OjFcZWEAGy2E3Vkh",
