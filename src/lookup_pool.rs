@@ -2,27 +2,28 @@ use lru::LruCache;
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
 use std::num::NonZeroUsize;
-use std::ops::Range;
 
-pub struct LookupPool<A, B> {
-    range: Range<B>,
+pub struct LookupPool<A, B, I> {
+    iterator: I,
     pool: VecDeque<B>,
     forward: LruCache<A, B>,
     reverse: HashMap<B, A>,
 }
 
-impl<A, B> LookupPool<A, B>
+impl<A, B, I> LookupPool<A, B, I>
 where
     A: Eq + Hash + Clone,
     B: Eq + Hash + Copy,
-    Range<B>: ExactSizeIterator<Item = B>,
+    I: ExactSizeIterator<Item = B>,
 {
-    pub fn new(range: Range<B>) -> Self {
-        let length = range.len() - 1;
+    pub fn new(iterator: I) -> Self {
+        let length = iterator.len() - 1;
         Self {
-            range: range,
+            iterator,
             pool: VecDeque::new(),
-            forward: LruCache::new(NonZeroUsize::new(length).unwrap()),
+            forward: LruCache::new(
+                NonZeroUsize::new(length).expect("non-zero range for lookup pool"),
+            ),
             reverse: HashMap::new(),
         }
     }
@@ -31,7 +32,10 @@ where
         match self.forward.get(a) {
             Some(b) => *b,
             None => {
-                let b = self.pool.pop_front().unwrap_or(self.range.next().unwrap());
+                let b = self
+                    .pool
+                    .pop_front()
+                    .unwrap_or_else(|| self.iterator.next().unwrap());
                 if let Some((.., v)) = self.forward.push(a.clone(), b) {
                     if v != b {
                         self.reverse.remove(&v);
@@ -52,12 +56,12 @@ where
         self.forward.cap().get()
     }
 
-    pub fn resize(&mut self, range: Range<B>) {
-        let size = range.len() - 1;
-        self.range = range;
-        self.pool.clear();
-        self.reverse.clear();
-        self.forward.clear();
-        self.forward.resize(NonZeroUsize::new(size).unwrap());
-    }
+    // pub fn resize(&mut self, range: Range<B>) {
+    //     let size = range.len() - 1;
+    //     self.range = range;
+    //     self.pool.clear();
+    //     self.reverse.clear();
+    //     self.forward.clear();
+    //     self.forward.resize(NonZeroUsize::new(size).unwrap());
+    // }
 }

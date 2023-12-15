@@ -23,12 +23,6 @@
       { "host": "localhost", "port": 1883, "options": { "keepalive_interval": 30 } }
     ]
   },
-  
-  "driver": {
-    "local_addr": "172.20.0.1",
-    "pcap": { "interface": "lo0" },
-    "tun": { "netmask": "255.255.255.0" }
-  },
 
   "// NOTE: Tunnel ID and MQTT topic are prepended to all IP packets": "",
   "// Long IDs / topics will add significant overhead to traffic with many small packets": "",
@@ -37,11 +31,11 @@
     "// In bytes (Optional, default shown, must match client)": "",
     "id_length": 4,
     "topic": "zika/OjFcZWEAGy2E3Vkh",
-    "pool_start": "172.20.0.100",
-    "pool_end": "172.20.0.200"
+    "bind_cidr": "172.20.0.0/24",
   },
 
   "client": {
+    "bind_cidr": "172.20.0.0/24",
     "tunnels": [
       {
         "topic": "zika/OjFcZWEAGy2E3Vkh",

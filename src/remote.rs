@@ -8,8 +8,6 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::{sync::mpsc, task};
 
-use crate::lookup_pool::LookupPool;
-
 struct RemoteClient {
     nth: usize,
     mqttc: Arc<mqtt::AsyncClient>,
@@ -18,18 +16,19 @@ struct RemoteClient {
 
 pub struct Remote {
     clients: Vec<RemoteClient>,
-    receiver: mpsc::Receiver<(String, Bytes)>,
     subs: Arc<Mutex<Vec<String>>>,
 }
 
 impl Remote {
-    pub fn new(broker_opts: &Vec<mqtt::MqttOptions>, topics: Vec<String>) -> Self {
+    pub fn new(
+        broker_opts: &Vec<mqtt::MqttOptions>,
+        topics: Vec<String>,
+    ) -> (Self, mpsc::Receiver<(String, Bytes)>) {
         let (sender, receiver) = mpsc::channel(128);
         let subs = Arc::new(Mutex::new(topics));
         let mut remote = Self {
             clients: Vec::with_capacity(broker_opts.len()),
             subs: subs.clone(),
-            receiver,
         };
         for (idx, opt) in broker_opts.iter().enumerate() {
             let (mqtt_client, mut event_loop) = mqtt::AsyncClient::new(opt.clone(), 128);
@@ -66,7 +65,7 @@ impl Remote {
             });
             remote.clients.push(remote_client);
         }
-        remote
+        (remote, receiver)
     }
 
     async fn handle_packet(
@@ -80,7 +79,7 @@ impl Remote {
         match pkt {
             Packet::ConnAck(ConnAck {
                 code: Success,
-                properties: Some(prop),
+                properties: Some(_prop),
                 session_present,
             }) => {
                 // if let Some(alias_max) = prop.topic_alias_max {
@@ -154,12 +153,5 @@ impl Remote {
             }
         }
         unreachable!()
-    }
-
-    pub async fn recv(&mut self) -> (String, Bytes) {
-        match self.receiver.recv().await {
-            Some(pkt) => pkt,
-            _ => unreachable!(),
-        }
     }
 }

@@ -1,128 +1,202 @@
 use base64::{engine::general_purpose, Engine as _};
-use futures::stream::StreamExt;
+use bytes::Bytes;
+use etherparse::Ipv4Header;
+use futures::stream::{SplitSink, StreamExt};
+use futures::SinkExt;
+use ipnetwork::Ipv4Network;
 use rand::distributions::Standard;
 use rand::{thread_rng, Rng};
-use std::io::Read;
+use std::io::{Cursor, Write};
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::{sync::mpsc, task};
-use tun::{IntoAddress as _, TunPacket};
+use tokio_util::codec::Framed;
+use tun::{AsyncDevice, TunPacket, TunPacketCodec};
 
 use crate::config;
+use crate::ip_iter::SizedIpv4NetworkIterator;
 use crate::remote;
 
+type TunSink = SplitSink<Framed<AsyncDevice, TunPacketCodec>, TunPacket>;
+
 pub struct Client {
-    tunnels: Vec<Arc<Tunnel>>,
-    receiver: mpsc::Receiver<TunPacket>,
-    remote: Arc<remote::Remote>,
+    tunnels: Arc<Vec<Tunnel>>,
+    remote_receiver: mpsc::Receiver<(String, Bytes)>,
+    local_addr: Ipv4Addr,
+    sink: TunSink,
 }
 
-#[derive(Clone)]
 struct Tunnel {
     id: Vec<u8>,
     topic: String,
+    topic_base: String,
     bind_addr: std::net::Ipv4Addr,
 }
 
 impl Client {
     pub async fn new(config: &config::Config) -> Self {
-        let mqtt_options = config.broker_mqtt_options();
-
-        let remote = remote::Remote::new(&mqtt_options, Vec::new());
-        let arc_remote = Arc::new(remote);
-
         let client_config = config
             .client
             .as_ref()
             .expect("Client config to be non-null");
 
-        let (sender, receiver) = mpsc::channel(128);
+        let ip_network: Ipv4Network = client_config
+            .bind_cidr
+            .parse()
+            .expect("A proper CIDR for ip network");
+        let local_addr = SizedIpv4NetworkIterator::new(ip_network)
+            .next()
+            .expect("A subnet large enough to have a local ip");
+
+        log::info!(
+            "Creating tun at {:?} netmask {:?} local {:?}",
+            ip_network.ip(),
+            ip_network.mask(),
+            local_addr
+        );
+        let mut tun_config = tun::Configuration::default();
+        tun_config.address(local_addr);
+        tun_config.destination(local_addr);
+        tun_config.netmask(ip_network.mask());
+
+        #[cfg(target_os = "linux")]
+        tun_config.platform(|tun_config| {
+            tun_config.packet_information(true);
+        });
+
+        tun_config.up();
+
+        let dev = tun::create_as_async(&tun_config).expect("Tunnel");
+        let (sink, mut stream) = dev.into_framed().split();
+
+        let mqtt_options = config.broker_mqtt_options();
+
+        let (remote, remote_receiver) = remote::Remote::new(&mqtt_options, Vec::new());
+
         let mut tunnels = Vec::with_capacity(client_config.tunnels.len());
         let mut rng = thread_rng();
 
         for client_tunnel_config in &client_config.tunnels {
-            let mut tun_config = tun::Configuration::default();
-            tun_config.address(client_tunnel_config.bind_addr.clone());
-            if let Some(driver_tun_config) = &config.driver.tun {
-                tun_config.netmask(driver_tun_config.netmask.clone());
-            }
-            tun_config.up();
-
-            #[cfg(target_os = "linux")]
-            tun_config.platform(|tun_config| {
-                tun_config.packet_information(true);
-            });
-
-            let dev = tun::create_as_async(&tun_config).unwrap();
-            let mut stream = dev.into_framed();
-
             let random_id: Vec<u8> = (&mut rng)
                 .sample_iter(Standard)
                 .take(client_tunnel_config.id_length)
                 .collect();
-
-            let base64_id = general_purpose::STANDARD.encode(&random_id);
+            let base64_id = general_purpose::URL_SAFE_NO_PAD.encode(&random_id);
             let topic_base = &client_tunnel_config.topic;
             let topic = format!("{topic_base}/{base64_id}");
-            let subscribe_result = arc_remote.subscribe(topic).await;
+            let bind_addr = client_tunnel_config.bind_addr;
+
+            if !ip_network.contains(bind_addr) {
+                log::error!("{:?} is outside of the subnet, skipping", bind_addr);
+                continue;
+            }
+            log::info!("Binding {:?} to {:?}", &topic, &bind_addr);
+
+            let subscribe_result = remote.subscribe(topic.clone()).await;
             if let Err(err) = subscribe_result {
                 log::error!("Subscribe failed: {:?}", err);
             }
 
             let tunnel = Tunnel {
                 id: random_id,
-                topic: client_tunnel_config.topic.clone(),
-                bind_addr: client_tunnel_config.bind_addr.into_address().unwrap(),
+                topic,
+                topic_base: topic_base.to_string(),
+                bind_addr,
             };
-            let arc_tunnel = Arc::new(tunnel);
 
-            let loop_sender = sender.clone();
-            let loop_remote = arc_remote.clone();
-            let loop_tunnel = arc_tunnel.clone();
-
-            task::spawn(async move {
-                while let Some(packet) = stream.next().await {
-                    match packet {
-                        Ok(pkt) => {
-                            Self::handle_packet(&loop_remote, &loop_tunnel, &pkt).await;
-                            let _ = loop_sender.clone().send(pkt).await;
-                        }
-                        Err(err) => panic!("Error: {:?}", err),
-                    }
-                }
-            });
-
-            tunnels.push(arc_tunnel.clone());
+            tunnels.push(tunnel);
         }
 
+        let arc_tunnels = Arc::new(tunnels);
+        let loop_tunnels = arc_tunnels.clone();
+
+        task::spawn(async move {
+            while let Some(packet) = stream.next().await {
+                match packet {
+                    Ok(pkt) => {
+                        Self::handle_packet(&remote, &loop_tunnels, &pkt).await;
+                    }
+                    Err(err) => panic!("Error: {:?}", err),
+                }
+            }
+        });
+
         Client {
-            tunnels: tunnels,
-            receiver: receiver,
-            remote: arc_remote.clone(),
+            tunnels: arc_tunnels.clone(),
+            remote_receiver,
+            local_addr,
+            sink,
         }
     }
 
-    async fn handle_packet(remote: &remote::Remote, tunnel: &Tunnel, packet: &TunPacket) {
+    // tun -> mqtt
+    async fn handle_packet(remote: &remote::Remote, tunnels: &Vec<Tunnel>, packet: &TunPacket) {
         let dest = etherparse::IpHeader::from_slice(&packet.get_bytes())
             .ok()
             .and_then(|header| match header {
                 (etherparse::IpHeader::Version4(ipv4_header, _), _, _) => {
-                    let tuple: (u8, u8, u8, u8) = ipv4_header.destination.into();
-                    tuple.into_address().ok()
+                    Some(Ipv4Addr::from(ipv4_header.destination))
                 }
                 _ => None,
             });
-
-        if dest == Some(tunnel.bind_addr) {
-            let payload = [&tunnel.id[..], &packet.get_bytes().to_vec()[..]].concat();
-            let result = remote.publish(&tunnel.topic, payload).await;
-            log::debug!("published {:?}", result);
+        for tunnel in tunnels {
+            if dest == Some(tunnel.bind_addr) {
+                let payload = [&tunnel.id[..], &packet.get_bytes().to_vec()[..]].concat();
+                let result = remote.publish(&tunnel.topic_base, payload).await;
+                if let Err(result) = result {
+                    log::error!("Cannot publish to remote {:?}", result);
+                }
+                return;
+            }
         }
+        log::warn!(
+            "Received packet to {:?}, but there's no tunnel with this ip",
+            &dest
+        );
+    }
+
+    // mqtt -> tun
+    async fn handle_remote_message(
+        &mut self,
+        topic: String,
+        message: Bytes,
+    ) -> Result<(), etherparse::WriteError> {
+        let parsed = Ipv4Header::from_slice(&message);
+        for tunnel in self.tunnels.as_ref() {
+            if tunnel.topic != topic {
+                continue;
+            }
+            let packet_with_updated_header = match parsed {
+                Err(error) => {
+                    log::debug!("Cannot parse ip packet {:?}", error);
+                    message.to_vec()
+                }
+                Ok((mut ipv4_header, rest)) => {
+                    ipv4_header.source = tunnel.bind_addr.octets();
+                    ipv4_header.destination = self.local_addr.octets();
+                    let mut cursor = Cursor::new(Vec::new());
+                    ipv4_header.write(&mut cursor)?;
+                    cursor.write_all(rest)?;
+                    cursor.into_inner()
+                }
+            };
+            self.sink
+                .send(TunPacket::new(packet_with_updated_header))
+                .await?;
+            break;
+        }
+        Ok(())
     }
 
     pub async fn run(&mut self) {
         loop {
-            let x = self.receiver.recv().await;
-            log::debug!("recv = {:?}", x);
+            if let Some((topic, message)) = self.remote_receiver.recv().await {
+                if let Err(err) = self.handle_remote_message(topic, message).await {
+                    log::error!("Error in handle_remote_message {:?}", err);
+                }
+            } else {
+                break;
+            }
         }
     }
 }
