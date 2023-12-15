@@ -95,10 +95,7 @@ impl Server {
     ) -> Result<(), rumqttc::v5::ClientError> {
         let dest = Ipv4Header::from_slice(&packet.get_bytes())
             .ok()
-            .and_then(|(ipv4_header, _)| {
-                let tuple: (u8, u8, u8, u8) = ipv4_header.destination.into();
-                tuple.into_address().ok()
-            });
+            .map(|(ipv4_header, _)| Ipv4Addr::from(ipv4_header.destination));
         if let Some(d) = dest {
             let ip_pool = ip_pool.lock().await;
             if let Some(topic) = ip_pool.get_reverse(&d.into()) {

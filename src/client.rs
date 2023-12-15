@@ -131,8 +131,7 @@ impl Client {
             .ok()
             .and_then(|header| match header {
                 (etherparse::IpHeader::Version4(ipv4_header, _), _, _) => {
-                    let tuple: (u8, u8, u8, u8) = ipv4_header.destination.into();
-                    tuple.into_address().ok()
+                    Some(Ipv4Addr::from(ipv4_header.destination))
                 }
                 _ => None,
             });
