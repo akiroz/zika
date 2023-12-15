@@ -74,10 +74,10 @@ impl Client {
 
         for client_tunnel_config in &client_config.tunnels {
             let random_id: Vec<u8> = (&mut rng)
-                .sample_iter(Alphanumeric)
+                .sample_iter(Standard)
                 .take(client_tunnel_config.id_length)
                 .collect();
-            let base64_id = general_purpose::STANDARD.encode(&random_id);
+            let base64_id = general_purpose::URL_SAFE_NO_PAD.encode(&random_id);
             let topic_base = &client_tunnel_config.topic;
             let topic = format!("{topic_base}/{base64_id}");
             let bind_addr = client_tunnel_config.bind_addr;

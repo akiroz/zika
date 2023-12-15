@@ -116,7 +116,7 @@ impl Server {
         id: &[u8],
         message: &[u8],
     ) -> Result<(), etherparse::WriteError> {
-        let base64_id = general_purpose::STANDARD.encode(id);
+        let base64_id = general_purpose::URL_SAFE_NO_PAD.encode(id);
         let topic_base = &self.topic;
         let topic = format!("{topic_base}/{base64_id}");
         let ip: Ipv4Addr = {
