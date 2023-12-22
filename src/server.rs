@@ -33,7 +33,7 @@ impl Server {
     pub fn new(config: config::Config) -> Self {
         let mqtt_options = config.broker_mqtt_options();
         let server_config = config.server.expect("Server config to be non-null");
-        let (remote, remote_receiver) =
+        let (mut remote, remote_receiver) =
             remote::Remote::new(&mqtt_options, vec![server_config.topic.clone()]);
 
         let ip_network: Ipv4Network = server_config
@@ -75,7 +75,7 @@ impl Server {
                 match packet {
                     Ok(pkt) => {
                         let result =
-                            Self::handle_packet(&remote, loop_ip_pool_arc.clone(), &pkt).await;
+                            Self::handle_packet(&mut remote, loop_ip_pool_arc.clone(), &pkt).await;
                         if let Err(err) = result {
                             log::error!("Error in handle_packet {:?}", err);
                         }
@@ -97,7 +97,7 @@ impl Server {
 
     // tun -> mqtt
     async fn handle_packet(
-        remote: &remote::Remote,
+        remote: &mut remote::Remote,
         ip_pool: Arc<Mutex<IpPool>>,
         packet: &TunPacket,
     ) -> Result<(), rumqttc::v5::ClientError> {
