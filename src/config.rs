@@ -19,6 +19,8 @@ pub struct MqttOptions {
     pub tls_insecure: bool,
     pub key_file: Option<String>,
     pub cert_file: Option<String>,
+
+    pub topic_alias_max: Option<u16>,
 }
 
 fn default_keepalive_interval() -> u64 {
@@ -98,10 +100,10 @@ impl MqttBroker {
             .map(char::from)
             .collect();
         let mut options = rumqttc::v5::MqttOptions::new(random_id, &self.host, self.port);
-        options.set_topic_alias_max(Some(5));
         // TODO: more options
         if let Some(opts) = &self.options {
             options.set_keep_alive(Duration::new(opts.keepalive_interval, 0));
+            options.set_topic_alias_max(opts.topic_alias_max);
 
             if let (Some(u), Some(p)) = (&opts.username, &opts.password) {
                 options.set_credentials(u, p);

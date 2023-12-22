@@ -13,8 +13,9 @@
 
       "// Unit: seconds (int), Optonal: defaults shown": "",
       "keepalive_interval": 60,
-      "reconnect_interval_min": 1,
-      "reconnect_interval_max": 60
+
+      "// Setting to 0 disable topic alias": "",
+      "topic_alias_max": 5,
     },
 
     "// Config can be overwritten on broker level": "",
