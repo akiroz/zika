@@ -1,7 +1,5 @@
 # Zika
 
-![](https://img.shields.io/badge/zig-0.11.0-informational)
-
 IP Tunneling over MQTT
 
 Designed to allow remote access for IoT/Edge devices connected to an existing MQTT network.
@@ -18,10 +16,6 @@ The MQTT connection is assumed to be secure & have authentication mechanisms in 
 Zika offers no extra layers of security on top of the MQTT connection,
 it's possible capture/inject arbitrary IP packets to/from the target device if the MQTT connection/broker is compromised.
 
-Currently supports 2 network drivers:
-- Linux: TUN driver
-- MacOS: BPF driver (via libpcap)
-
 ### Configuration
 
 See [zika_config.sample.json](zika_config.sample.json)
@@ -29,10 +23,9 @@ See [zika_config.sample.json](zika_config.sample.json)
 ### Building
 
 Dependencies:
-- libmosquitto
-- libpcap (MacOS only, built-in)
-- linux-headers (Linux only)
+- cargo
+- ...
 
 ```
-$ zig build -Drelease-safe=true
+$ cargo build
 ```
