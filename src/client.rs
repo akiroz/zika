@@ -71,7 +71,7 @@ impl Client {
 
         let mqtt_options = config.broker_mqtt_options();
 
-        let (remote, remote_receiver) = remote::Remote::new(&mqtt_options, Vec::new());
+        let (mut remote, remote_receiver) = remote::Remote::new(&mqtt_options, Vec::new());
 
         let mut tunnels = Vec::with_capacity(client_config.tunnels.len());
         let mut rng = thread_rng();
@@ -114,7 +114,7 @@ impl Client {
             while let Some(packet) = stream.next().await {
                 match packet {
                     Ok(pkt) => {
-                        Self::handle_packet(&remote, &loop_tunnels, &pkt).await;
+                        Self::handle_packet(&mut remote, &loop_tunnels, &pkt).await;
                     }
                     Err(err) => panic!("Error: {:?}", err),
                 }
@@ -130,7 +130,7 @@ impl Client {
     }
 
     // tun -> mqtt
-    async fn handle_packet(remote: &remote::Remote, tunnels: &Vec<Tunnel>, packet: &TunPacket) {
+    async fn handle_packet(remote: &mut remote::Remote, tunnels: &Vec<Tunnel>, packet: &TunPacket) {
         let dest = etherparse::IpHeader::from_slice(&packet.get_bytes())
             .ok()
             .and_then(|header| match header {
