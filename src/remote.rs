@@ -18,7 +18,6 @@ struct RemoteIncomingContext {
     nth: usize,
     sender: mpsc::Sender<(String, Bytes)>,
     subs: Arc<Mutex<Vec<String>>>,
-    alias_pool: Option<LookupPool<Bytes, u16, Range<u16>>>, // alias they created
 }
 
 struct RemoteClient {
@@ -63,7 +62,6 @@ impl Remote {
                 nth: idx,
                 sender: sender.clone(),
                 subs: subs.clone(),
-                alias_pool: None, // TODO: Don't send with topic alias by default, until getting topic_alias_max from remote
             };
             task::spawn(async move {
                 loop {
@@ -90,19 +88,9 @@ impl Remote {
         match pkt {
             Packet::ConnAck(ConnAck {
                 code: Success,
-                properties: Some(prop),
+                properties: _,
                 session_present,
             }) => {
-                if let Some(alias_max) = prop.topic_alias_max.filter(|n| *n > 0) {
-                    let range = 1..alias_max;
-                    if let Some(ref mut alias_pool) = context.alias_pool {
-                        alias_pool.resize(range);
-                    } else {
-                        context.alias_pool = Some(LookupPool::new(range));
-                    }
-                } else {
-                    context.alias_pool = None
-                }
                 if !session_present {
                     log::info!("broker[{}] !session_present", context.nth);
                     let subs_v = context.subs.lock().await;
@@ -131,26 +119,8 @@ impl Remote {
                 let topic_str = String::from_utf8(topic.to_vec())
                     .ok()
                     .filter(|n| n.len() > 0);
-                if let (Some(alias), Some(_)) = (topic_alias, &topic_str) {
-                    if let Some(ref mut pool) = context.alias_pool {
-                        pool.insert_forward(&topic, alias);
-                    }
-                }
                 if let Some(topic) = topic_str {
                     _ = context.sender.send((topic, payload)).await; // What if it's not ok?
-                } else if let Some(alias) = topic_alias {
-                    // No topic but we have alias
-                    if let Some(ref mut pool) = context.alias_pool {
-                        if let Some(t) = pool
-                            .get_reverse(&alias)
-                            .and_then(|t| String::from_utf8(t.to_vec()).ok())
-                        {
-                            log::debug!("Received message, Alias: {:?}, topic: {:?}", alias, t);
-                            _ = context.sender.send((t, payload)).await;
-                        } else {
-                            log::error!("Cannot find topic for alias {:?}", alias);
-                        }
-                    }
                 } else {
                     log::debug!("drop packet, non utf8 topic: {:?}", topic);
                 }
