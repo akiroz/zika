@@ -152,16 +152,12 @@ impl Client {
         &mut self,
         topic: String,
         message: Bytes,
-    ) -> Result<(), etherparse::WriteError> {
-        let parsed = Ipv4Header::from_slice(&message);
-        for tunnel in self.tunnels.as_ref() {
-            if tunnel.topic != topic {
-                continue;
-            }
-            let packet_with_updated_header = match parsed {
+    ) -> Result<bool, etherparse::WriteError> {
+        if let Some(tunnel) = self.tunnels.as_ref().iter().find(|&t| t.topic == topic) {
+            match Ipv4Header::from_slice(&message) {
                 Err(error) => {
                     log::debug!("packet parse failed {:?}", error);
-                    message.to_vec()
+                    Ok(false)
                 }
                 Ok((mut ipv4_header, rest)) => {
                     ipv4_header.source = tunnel.bind_addr.octets();
@@ -169,22 +165,31 @@ impl Client {
                     let mut cursor = Cursor::new(Vec::new());
                     ipv4_header.write(&mut cursor)?;
                     cursor.write_all(rest)?;
-                    cursor.into_inner()
+                    self.sink.send(TunPacket::new(cursor.into_inner())).await?;
+                    Ok(true)
                 }
-            };
-            self.sink
-                .send(TunPacket::new(packet_with_updated_header))
-                .await?;
-            break;
+            }
+        } else {
+            Ok(false)
         }
-        Ok(())
+    }
+
+    pub async fn inject_message(&mut self) {
+        // TODO
     }
 
     pub async fn run(&mut self) {
         loop {
             if let Some((topic, message)) = self.remote_receiver.recv().await {
-                if let Err(err) = self.handle_remote_message(topic, message).await {
-                    log::error!("handle_remote_message error {:?}", err);
+                match self.handle_remote_message(topic, message).await {
+                    Err(err) => {
+                        log::error!("handle_remote_message error {:?}", err);
+                    }
+                    Ok(handled) => {
+                        if !handled {
+                            // TODO: pass outside
+                        }
+                    }
                 }
             } else {
                 break;
