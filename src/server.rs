@@ -32,25 +32,20 @@ pub struct Server {
 impl Server {
     pub fn new(config: config::Config) -> Self {
         let mqtt_options = config.broker_mqtt_options();
-        let server_config = config.server.expect("Server config to be non-null");
+        let server_config = config.server.expect("non-null config");
         let (mut remote, remote_receiver) =
             remote::Remote::new(&mqtt_options, vec![server_config.topic.clone()]);
 
         let ip_network: Ipv4Network = server_config
             .bind_cidr
             .parse()
-            .expect("A proper CIDR for ip network");
+            .expect("CIDR notation");
         let mut ip_iter = SizedIpv4NetworkIterator::new(ip_network);
         let local_addr = ip_iter
             .next()
-            .expect("A subnet large enough to have a local ip");
+            .expect("subnet size > 1");
 
-        log::info!(
-            "Binding to {:?} netmask {:?} local {:?}",
-            ip_network.ip(),
-            ip_network.mask(),
-            local_addr
-        );
+        log::info!("bind {:?}/{}", local_addr, ip_network.prefix());
 
         let mut tun_config = tun::Configuration::default();
         tun_config.address(local_addr);
@@ -64,7 +59,7 @@ impl Server {
 
         tun_config.up();
 
-        let dev = tun::create_as_async(&tun_config).expect("Tunnel");
+        let dev = tun::create_as_async(&tun_config).expect("tunnel");
         let (sink, mut stream) = dev.into_framed().split();
 
         let ip_pool_arc = Arc::new(Mutex::new(LookupPool::new(ip_iter)));
@@ -74,10 +69,9 @@ impl Server {
             while let Some(packet) = stream.next().await {
                 match packet {
                     Ok(pkt) => {
-                        let result =
-                            Self::handle_packet(&mut remote, loop_ip_pool_arc.clone(), &pkt).await;
+                        let result = Self::handle_packet(&mut remote, loop_ip_pool_arc.clone(), &pkt).await;
                         if let Err(err) = result {
-                            log::error!("Error in handle_packet {:?}", err);
+                            log::error!("handle_packet error {:?}", err);
                         }
                     }
                     Err(err) => panic!("Cannot get packet from tun, error: {:?}", err),
@@ -109,7 +103,7 @@ impl Server {
             if let Some(topic) = ip_pool.get_reverse(&d.into()) {
                 remote.publish(&topic, packet.get_bytes().to_vec()).await?;
             } else {
-                log::debug!("Cannot find topic for {:?}", &d);
+                log::debug!("drop packet: no tunnel for {:?}", &d);
             }
         }
         Ok(())
@@ -131,7 +125,7 @@ impl Server {
         };
         let packet_with_updated_header = match Ipv4Header::from_slice(message) {
             Err(error) => {
-                log::debug!("Cannot parse ip packet {:?}", error);
+                log::debug!("packet parse failed {:?}", error);
                 message.to_vec()
             }
             Ok((mut ipv4_header, rest)) => {
@@ -154,7 +148,7 @@ impl Server {
             if let Some((_topic, id_message)) = self.remote_receiver.recv().await {
                 let (id, message) = id_message.split_at(self.id_length);
                 if let Err(err) = self.handle_remote_message(id, message).await {
-                    log::error!("Error in handle_remote_message {:?}", err);
+                    log::error!("handle_remote_message error {:?}", err);
                 }
             } else {
                 break;

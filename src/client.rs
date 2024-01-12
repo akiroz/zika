@@ -38,22 +38,17 @@ impl Client {
         let client_config = config
             .client
             .as_ref()
-            .expect("Client config to be non-null");
+            .expect("non-null config");
 
         let ip_network: Ipv4Network = client_config
             .bind_cidr
             .parse()
-            .expect("A proper CIDR for ip network");
+            .expect("CIDR notation");
         let local_addr = SizedIpv4NetworkIterator::new(ip_network)
             .next()
-            .expect("A subnet large enough to have a local ip");
+            .expect("subnet size > 1");
 
-        log::info!(
-            "Creating tun at {:?} netmask {:?} local {:?}",
-            ip_network.ip(),
-            ip_network.mask(),
-            local_addr
-        );
+        log::info!("tun {:?}/{}", local_addr, ip_network.prefix());
         let mut tun_config = tun::Configuration::default();
         tun_config.address(local_addr);
         tun_config.destination(local_addr);
@@ -66,7 +61,7 @@ impl Client {
 
         tun_config.up();
 
-        let dev = tun::create_as_async(&tun_config).expect("Tunnel");
+        let dev = tun::create_as_async(&tun_config).expect("tunnel");
         let (sink, mut stream) = dev.into_framed().split();
 
         let mqtt_options = config.broker_mqtt_options();
@@ -87,14 +82,14 @@ impl Client {
             let bind_addr = client_tunnel_config.bind_addr;
 
             if !ip_network.contains(bind_addr) {
-                log::error!("{:?} is outside of the subnet, skipping", bind_addr);
+                log::warn!("skipping {:?} (outside subnet)", bind_addr);
                 continue;
             }
-            log::info!("Binding {:?} to {:?}", &topic, &bind_addr);
+            log::info!("bind {:?} -> {:?}", &bind_addr, &topic);
 
             let subscribe_result = remote.subscribe(topic.clone()).await;
             if let Err(err) = subscribe_result {
-                log::error!("Subscribe failed: {:?}", err);
+                log::error!("subscribe failed: {:?}", err);
             }
 
             let tunnel = Tunnel {
@@ -144,15 +139,12 @@ impl Client {
                 let payload = [&tunnel.id[..], &packet.get_bytes().to_vec()[..]].concat();
                 let result = remote.publish(&tunnel.topic_base, payload).await;
                 if let Err(result) = result {
-                    log::error!("Cannot publish to remote {:?}", result);
+                    log::error!("publish failed {:?}", result);
                 }
                 return;
             }
         }
-        log::warn!(
-            "Received packet to {:?}, but there's no tunnel with this ip",
-            &dest
-        );
+        log::warn!("drop packet: unknown addr {:?}", &dest);
     }
 
     // mqtt -> tun
@@ -168,7 +160,7 @@ impl Client {
             }
             let packet_with_updated_header = match parsed {
                 Err(error) => {
-                    log::debug!("Cannot parse ip packet {:?}", error);
+                    log::debug!("packet parse failed {:?}", error);
                     message.to_vec()
                 }
                 Ok((mut ipv4_header, rest)) => {
@@ -192,7 +184,7 @@ impl Client {
         loop {
             if let Some((topic, message)) = self.remote_receiver.recv().await {
                 if let Err(err) = self.handle_remote_message(topic, message).await {
-                    log::error!("Error in handle_remote_message {:?}", err);
+                    log::error!("handle_remote_message error {:?}", err);
                 }
             } else {
                 break;
