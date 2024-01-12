@@ -1,6 +1,10 @@
 pub mod client;
-pub mod config;
-pub mod ip_iter;
-mod lookup_pool;
-mod remote;
 pub mod server;
+pub mod config;
+
+// Utils
+pub mod ip_iter;
+pub mod lookup_pool;
+
+mod remote;
+
