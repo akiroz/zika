@@ -1,6 +1,7 @@
 [package]
 name = "zika"
 version = "3.0.0"
+license = "MIT"
 description = "IP Tunneling over MQTT"
 edition = "2021"
 
