@@ -9,13 +9,12 @@
       "ca_file": "ca.pem",
       "key_file": "key.pem",
       "cert_file": "cert.pem",
-      "tls_insecure": false,
 
       "// Unit: seconds (int), Optonal: defaults shown": "",
       "keepalive_interval": 60,
 
       "// Setting to 0 disable topic alias": "",
-      "topic_alias_max": 5,
+      "topic_alias_max": 5
     },
 
     "// Config can be overwritten on broker level": "",
@@ -32,7 +31,7 @@
     "// In bytes (Optional, default shown, must match client)": "",
     "id_length": 4,
     "topic": "zika/OjFcZWEAGy2E3Vkh",
-    "bind_cidr": "172.20.0.0/24",
+    "bind_cidr": "172.20.0.0/24"
   },
 
   "client": {

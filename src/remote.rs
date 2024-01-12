@@ -14,15 +14,13 @@ use std::ops::Range;
 
 // Context for receiving messsage from remote
 struct RemoteIncomingContext {
-    mqtt_client: Arc<mqtt::AsyncClient>,
     nth: usize,
+    mqtt_client: Arc<mqtt::AsyncClient>,
     sender: mpsc::Sender<(String, Bytes)>,
     subs: Arc<Mutex<Vec<String>>>,
-    alias_pool: Option<LookupPool<Bytes, u16, Range<u16>>>, // alias they created
 }
 
 struct RemoteClient {
-    nth: usize,
     mqttc: Arc<mqtt::AsyncClient>,
     alias_pool: Option<LookupPool<String, u16, Range<u16>>>, // alias we invented
 }
@@ -53,28 +51,26 @@ impl Remote {
                 .filter(|n| *n > 0)
                 .map(|count| LookupPool::new(1..count));
             let remote_client = RemoteClient {
-                nth: idx,
                 mqttc: arc_mqtt_client.clone(),
                 alias_pool,
             };
 
             let mut context = RemoteIncomingContext {
-                mqtt_client: arc_mqtt_client,
                 nth: idx,
+                mqtt_client: arc_mqtt_client,
                 sender: sender.clone(),
                 subs: subs.clone(),
-                alias_pool: None, // TODO: Don't send with topic alias by default, until getting topic_alias_max from remote
             };
             task::spawn(async move {
                 loop {
                     use mqtt::Event::Incoming;
                     match event_loop.poll().await {
                         Ok(Incoming(pkt)) => {
-                            log::debug!("Received Incoming Packet {:?}", pkt);
+                            log::debug!("broker[{}] recv {:?}", idx, pkt);
                             Self::handle_packet(&mut context, pkt).await;
                         }
                         x => {
-                            log::debug!("Received Other Packet {:?}", x);
+                            log::debug!("broker[{}] recv {:?}", idx, x);
                             continue;
                         }
                     };
@@ -88,21 +84,7 @@ impl Remote {
     async fn handle_packet(context: &mut RemoteIncomingContext, pkt: Packet) {
         use mqtt::mqttbytes::v5::{ConnAck, ConnectReturnCode::Success, Filter, Publish};
         match pkt {
-            Packet::ConnAck(ConnAck {
-                code: Success,
-                properties: Some(prop),
-                session_present,
-            }) => {
-                if let Some(alias_max) = prop.topic_alias_max.filter(|n| *n > 0) {
-                    let range = 1..alias_max;
-                    if let Some(ref mut alias_pool) = context.alias_pool {
-                        alias_pool.resize(range);
-                    } else {
-                        context.alias_pool = Some(LookupPool::new(range));
-                    }
-                } else {
-                    context.alias_pool = None
-                }
+            Packet::ConnAck(ConnAck { code: Success, session_present, .. }) => {
                 if !session_present {
                     log::info!("broker[{}] !session_present", context.nth);
                     let subs_v = context.subs.lock().await;
@@ -121,36 +103,12 @@ impl Remote {
             Packet::ConnAck(ConnAck { code, .. }) => {
                 panic!("Refused by broker: {:?}", code);
             }
-            Packet::Publish(Publish {
-                topic,
-                payload,
-                properties,
-                ..
-            }) => {
-                let topic_alias = properties.and_then(|p| p.topic_alias);
+            Packet::Publish(Publish { topic, payload, .. }) => {
                 let topic_str = String::from_utf8(topic.to_vec())
                     .ok()
                     .filter(|n| n.len() > 0);
-                if let (Some(alias), Some(_)) = (topic_alias, &topic_str) {
-                    if let Some(ref mut pool) = context.alias_pool {
-                        pool.insert_forward(&topic, alias);
-                    }
-                }
                 if let Some(topic) = topic_str {
                     _ = context.sender.send((topic, payload)).await; // What if it's not ok?
-                } else if let Some(alias) = topic_alias {
-                    // No topic but we have alias
-                    if let Some(ref mut pool) = context.alias_pool {
-                        if let Some(t) = pool
-                            .get_reverse(&alias)
-                            .and_then(|t| String::from_utf8(t.to_vec()).ok())
-                        {
-                            log::debug!("Received message, Alias: {:?}, topic: {:?}", alias, t);
-                            _ = context.sender.send((t, payload)).await;
-                        } else {
-                            log::error!("Cannot find topic for alias {:?}", alias);
-                        }
-                    }
                 } else {
                     log::debug!("drop packet, non utf8 topic: {:?}", topic);
                 }
@@ -189,16 +147,12 @@ impl Remote {
                 let already_sent_alias = pool.contains(topic);
                 let alias = pool.get_forward(topic);
                 properties.topic_alias = Some(alias);
-                if already_sent_alias {
-                    ""
-                } else {
-                    topic
-                }
-            } else {
+                if already_sent_alias { "" } else { topic }
+            } else { // Alias not used
                 topic
             };
             log::debug!(
-                "Sending message with topic: {:?} props: {:?}",
+                "pub {:?} props: {:?}",
                 topic_to_send,
                 properties
             );
