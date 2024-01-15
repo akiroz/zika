@@ -66,11 +66,11 @@ impl Remote {
                     use mqtt::Event::Incoming;
                     match event_loop.poll().await {
                         Ok(Incoming(pkt)) => {
-                            log::debug!("broker[{}] recv {:?}", idx, pkt);
+                            log::trace!("broker[{}] recv {:?}", idx, pkt);
                             Self::handle_packet(&mut context, pkt).await;
                         }
                         x => {
-                            log::debug!("broker[{}] recv {:?}", idx, x);
+                            log::trace!("broker[{}] recv {:?}", idx, x);
                             continue;
                         }
                     };
@@ -156,7 +156,7 @@ impl Remote {
             } else { // Alias not used
                 topic
             };
-            log::debug!(
+            log::trace!(
                 "pub {:?} props: {:?}",
                 topic_to_send,
                 properties
