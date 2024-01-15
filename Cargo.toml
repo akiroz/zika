@@ -1,6 +1,6 @@
 [package]
 name = "zika"
-version = "3.2.0"
+version = "3.2.1"
 license = "MIT"
 description = "IP Tunneling over MQTT"
 repository = "https://github.com/akiroz/zika"

@@ -1,6 +1,5 @@
 use core::time::Duration;
-use rand::distributions::Alphanumeric;
-use rand::{thread_rng, Rng};
+use rand::{thread_rng, Rng, distributions::Alphanumeric};
 use rustls::{Certificate, PrivateKey, RootCertStore};
 use serde::Deserialize;
 use std::fs::{read_to_string, File};
@@ -106,11 +105,7 @@ impl MqttBroker {
         base_mqtt_options: &Option<MqttOptions>,
     ) -> rumqttc::v5::MqttOptions {
         let mut rng = thread_rng();
-        let random_id: String = (&mut rng)
-            .sample_iter(Alphanumeric)
-            .take(7)
-            .map(char::from)
-            .collect();
+        let random_id: String = (0..7).map(|_| rng.sample(Alphanumeric) as char).collect();
         let mut options = rumqttc::v5::MqttOptions::new(random_id, &self.host, self.port);
         let mqtt_options = match (base_mqtt_options, self.options.clone()) {
             (Some(b), Some(opts)) => Some(b.merge_with_option(opts)),

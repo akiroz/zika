@@ -70,18 +70,18 @@ impl Client {
         let mut tunnels = Vec::with_capacity(client_config.tunnels.len());
         let mut rng = thread_rng();
         for client_tunnel_config in &client_config.tunnels {
-            let random_id: Vec<u8> = (&mut rng)
-                .sample_iter(Standard)
-                .take(client_tunnel_config.id_length)
-                .collect();
+            let id_len = client_tunnel_config.id_length;
+            let random_id: Vec<u8> = (0..id_len).map(|_| rng.sample(Standard)).collect();
             let base64_id = general_purpose::URL_SAFE_NO_PAD.encode(&random_id);
             let topic_base = &client_tunnel_config.topic;
             let topic = format!("{topic_base}/{base64_id}");
             let bind_addr = client_tunnel_config.bind_addr;
 
+            if bind_addr == local_addr {
+                panic!("tunnel bind_addr == local_addr, first address in subnet is reserved");
+            }
             if !ip_network.contains(bind_addr) {
-                log::warn!("skipping {:?} (outside subnet)", bind_addr);
-                continue;
+                panic!("tunnel bind_addr outside subnet");
             }
             log::info!("bind {:?} -> {:?}", &bind_addr, &topic);
 
