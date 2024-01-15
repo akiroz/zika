@@ -7,6 +7,7 @@ use base64::{engine::general_purpose, Engine as _};
 use futures::{SinkExt, stream::{SplitSink, StreamExt}};
 use rand::{thread_rng, Rng, distributions::Standard};
 
+use rumqttc;
 use etherparse::Ipv4Header;
 use ipnetwork::Ipv4Network;
 use tokio::{task, sync::{mpsc, broadcast, Mutex}};
@@ -37,19 +38,18 @@ struct Tunnel {
 }
 
 impl Client {
-    pub async fn new(config: &config::Config) -> Self {
-        let client_config = config
-            .client
-            .as_ref()
-            .expect("non-null config");
+    pub async fn from_config(config: config::Config) -> Self {
+        let mqtt_options = config.broker_mqtt_options();
+        let client_config = config.client.expect("non-null client config");
+        Self::new(mqtt_options, client_config).await
+    }
 
-        let ip_network: Ipv4Network = client_config
-            .bind_cidr
-            .parse()
-            .expect("CIDR notation");
-        let local_addr = SizedIpv4NetworkIterator::new(ip_network)
-            .next()
-            .expect("subnet size > 1");
+    pub async fn new(
+        mqtt_options: Vec<rumqttc::v5::MqttOptions>,
+        client_config: config::ClientConfig
+    ) -> Self {
+        let ip_network: Ipv4Network = client_config.bind_cidr.parse().expect("CIDR notation");
+        let local_addr = SizedIpv4NetworkIterator::new(ip_network).next().expect("subnet size > 1");
 
         log::info!("tun {:?}/{}", local_addr, ip_network.prefix());
         let mut tun_config = tun::Configuration::default();
@@ -63,17 +63,12 @@ impl Client {
         });
 
         tun_config.up();
-
         let tun_dev = tun::create_as_async(&tun_config).expect("tunnel");
         let (tun_sink, mut tun_stream) = tun_dev.into_framed().split();
 
-        let mqtt_options = config.broker_mqtt_options();
-
-        let (remote, remote_recv) = remote::Remote::new(&mqtt_options, Vec::new());
-
+        let (remote, remote_recv) = remote::Remote::new(&mqtt_options, vec![]);
         let mut tunnels = Vec::with_capacity(client_config.tunnels.len());
         let mut rng = thread_rng();
-
         for client_tunnel_config in &client_config.tunnels {
             let random_id: Vec<u8> = (&mut rng)
                 .sample_iter(Standard)
@@ -95,18 +90,16 @@ impl Client {
                 log::error!("subscribe failed: {:?}", err);
             }
 
-            let tunnel = Tunnel {
+            tunnels.push(Tunnel {
                 id: random_id,
                 topic,
                 topic_base: topic_base.to_string(),
                 bind_addr,
-            };
-
-            tunnels.push(tunnel);
+            });
         }
 
         let (remote_passthru_send, remote_passthru_recv) = broadcast::channel(1);
-        let client = Client {
+        let client = Self {
             local_addr,
             tunnels: Arc::new(tunnels),
             remote: Arc::new(Mutex::new(remote)),

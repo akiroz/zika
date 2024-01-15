@@ -7,6 +7,6 @@ async fn main() {
     env_logger::init();
     let config = read_from_default_location().expect("A proper config file");
     log::debug!("Config = {:?}", config);
-    let mut client = Client::new(&config).await;
+    let mut client = Client::from_config(config).await;
     client.run().await;
 }

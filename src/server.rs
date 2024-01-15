@@ -30,20 +30,21 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(config: config::Config) -> Self {
+    pub fn from_config(config: config::Config) -> Self {
         let mqtt_options = config.broker_mqtt_options();
-        let server_config = config.server.expect("non-null config");
-        let (mut remote, remote_recv) =
-            remote::Remote::new(&mqtt_options, vec![server_config.topic.clone()]);
+        let server_config = config.server.expect("non-null server config");
+        Self::new(mqtt_options, server_config)
+    }
 
-        let ip_network: Ipv4Network = server_config
-            .bind_cidr
-            .parse()
-            .expect("CIDR notation");
+    pub fn new(
+        mqtt_options: Vec<rumqttc::v5::MqttOptions>,
+        server_config: config::ServerConfig
+    ) -> Self {
+        let ip_network: Ipv4Network = server_config.bind_cidr.parse().expect("CIDR notation");
         let mut ip_iter = SizedIpv4NetworkIterator::new(ip_network);
-        let local_addr = ip_iter
-            .next()
-            .expect("subnet size > 1");
+        let local_addr = ip_iter.next().expect("subnet size > 1");
+
+        let (mut remote, remote_recv) = remote::Remote::new(&mqtt_options, vec![server_config.topic.clone()]);
 
         log::info!("bind {:?}/{}", local_addr, ip_network.prefix());
 
