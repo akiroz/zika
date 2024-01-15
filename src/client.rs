@@ -1,15 +1,15 @@
-use base64::{engine::general_purpose, Engine as _};
-use bytes::Bytes;
-use etherparse::Ipv4Header;
-use futures::stream::{SplitSink, StreamExt};
-use futures::SinkExt;
-use ipnetwork::Ipv4Network;
-use rand::distributions::Standard;
-use rand::{thread_rng, Rng};
 use std::io::{Cursor, Write};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
-use tokio::{sync::mpsc, task};
+
+use bytes::Bytes;
+use base64::{engine::general_purpose, Engine as _};
+use futures::{SinkExt, stream::{SplitSink, StreamExt}};
+use rand::{thread_rng, Rng, distributions::Standard};
+
+use etherparse::Ipv4Header;
+use ipnetwork::Ipv4Network;
+use tokio::{task, sync::{mpsc, broadcast, Mutex}};
 use tokio_util::codec::Framed;
 use tun::{AsyncDevice, TunPacket, TunPacketCodec};
 
@@ -20,10 +20,13 @@ use crate::remote;
 type TunSink = SplitSink<Framed<AsyncDevice, TunPacketCodec>, TunPacket>;
 
 pub struct Client {
-    tunnels: Arc<Vec<Tunnel>>,
-    remote_receiver: mpsc::Receiver<(String, Bytes)>,
     local_addr: Ipv4Addr,
-    sink: TunSink,
+    tunnels: Arc<Vec<Tunnel>>,
+    pub remote: Arc<Mutex<remote::Remote>>, // Allow external mqtt ops
+    remote_recv: mpsc::Receiver<(String, Bytes)>,
+    remote_passthru_send: broadcast::Sender<(String, Bytes)>,
+    pub remote_passthru_recv: broadcast::Receiver<(String, Bytes)>,
+    tun_sink: TunSink,
 }
 
 struct Tunnel {
@@ -61,12 +64,12 @@ impl Client {
 
         tun_config.up();
 
-        let dev = tun::create_as_async(&tun_config).expect("tunnel");
-        let (sink, mut stream) = dev.into_framed().split();
+        let tun_dev = tun::create_as_async(&tun_config).expect("tunnel");
+        let (tun_sink, mut tun_stream) = tun_dev.into_framed().split();
 
         let mqtt_options = config.broker_mqtt_options();
 
-        let (mut remote, remote_receiver) = remote::Remote::new(&mqtt_options, Vec::new());
+        let (remote, remote_recv) = remote::Remote::new(&mqtt_options, Vec::new());
 
         let mut tunnels = Vec::with_capacity(client_config.tunnels.len());
         let mut rng = thread_rng();
@@ -102,13 +105,24 @@ impl Client {
             tunnels.push(tunnel);
         }
 
-        let arc_tunnels = Arc::new(tunnels);
-        let loop_tunnels = arc_tunnels.clone();
+        let (remote_passthru_send, remote_passthru_recv) = broadcast::channel(1);
+        let client = Client {
+            local_addr,
+            tunnels: Arc::new(tunnels),
+            remote: Arc::new(Mutex::new(remote)),
+            remote_recv,
+            remote_passthru_send,
+            remote_passthru_recv,
+            tun_sink,
+        };
 
+        let loop_remote = client.remote.clone();
+        let loop_tunnels = client.tunnels.clone();
         task::spawn(async move {
-            while let Some(packet) = stream.next().await {
+            while let Some(packet) = tun_stream.next().await {
                 match packet {
                     Ok(pkt) => {
+                        let mut remote = loop_remote.lock().await;
                         Self::handle_packet(&mut remote, &loop_tunnels, &pkt).await;
                     }
                     Err(err) => panic!("Error: {:?}", err),
@@ -116,12 +130,7 @@ impl Client {
             }
         });
 
-        Client {
-            tunnels: arc_tunnels.clone(),
-            remote_receiver,
-            local_addr,
-            sink,
-        }
+        client
     }
 
     // tun -> mqtt
@@ -165,7 +174,7 @@ impl Client {
                     let mut cursor = Cursor::new(Vec::new());
                     ipv4_header.write(&mut cursor)?;
                     cursor.write_all(rest)?;
-                    self.sink.send(TunPacket::new(cursor.into_inner())).await?;
+                    self.tun_sink.send(TunPacket::new(cursor.into_inner())).await?;
                     Ok(true)
                 }
             }
@@ -174,20 +183,18 @@ impl Client {
         }
     }
 
-    pub async fn inject_message(&mut self) {
-        // TODO
-    }
-
     pub async fn run(&mut self) {
         loop {
-            if let Some((topic, message)) = self.remote_receiver.recv().await {
-                match self.handle_remote_message(topic, message).await {
+            if let Some((topic, message)) = self.remote_recv.recv().await {
+                match self.handle_remote_message(topic.clone(), message.clone()).await {
                     Err(err) => {
                         log::error!("handle_remote_message error {:?}", err);
                     }
                     Ok(handled) => {
                         if !handled {
-                            // TODO: pass outside
+                            if let Err(err) = self.remote_passthru_send.send((topic, message)) {
+                                log::warn!("remote_passthru_send error {:?}", err);
+                            }
                         }
                     }
                 }

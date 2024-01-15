@@ -1,39 +1,39 @@
-use crate::config;
-use crate::ip_iter::SizedIpv4NetworkIterator;
-use crate::lookup_pool::LookupPool;
-use crate::remote;
-
-use base64::{engine::general_purpose, Engine as _};
-use bytes::Bytes;
-use etherparse::Ipv4Header;
-use futures::stream::{SplitSink, StreamExt};
-use futures::SinkExt;
-use ipnetwork::Ipv4Network;
 use std::io::{Cursor, Write};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
-use tokio::task;
+
+use bytes::Bytes;
+use base64::{engine::general_purpose, Engine as _};
+use futures::{SinkExt, stream::{SplitSink, StreamExt}};
+
+use etherparse::Ipv4Header;
+use ipnetwork::Ipv4Network;
+use tokio::{task, sync::{mpsc, Mutex}};
 use tokio_util::codec::Framed;
 use tun::{AsyncDevice, TunPacket, TunPacketCodec};
+
+use crate::config;
+use crate::remote;
+use crate::ip_iter::SizedIpv4NetworkIterator;
+use crate::lookup_pool::LookupPool;
 
 type TunSink = SplitSink<Framed<AsyncDevice, TunPacketCodec>, TunPacket>;
 type IpPool = LookupPool<String, Ipv4Addr, SizedIpv4NetworkIterator>;
 
 pub struct Server {
-    remote_receiver: mpsc::Receiver<(String, Bytes)>,
+    id_length: usize,
     topic: String,
     local_addr: Ipv4Addr,
-    id_length: usize,
     ip_pool: Arc<Mutex<IpPool>>,
-    sink: TunSink,
+    remote_recv: mpsc::Receiver<(String, Bytes)>,
+    tun_sink: TunSink,
 }
 
 impl Server {
     pub fn new(config: config::Config) -> Self {
         let mqtt_options = config.broker_mqtt_options();
         let server_config = config.server.expect("non-null config");
-        let (mut remote, remote_receiver) =
+        let (mut remote, remote_recv) =
             remote::Remote::new(&mqtt_options, vec![server_config.topic.clone()]);
 
         let ip_network: Ipv4Network = server_config
@@ -60,13 +60,13 @@ impl Server {
         tun_config.up();
 
         let dev = tun::create_as_async(&tun_config).expect("tunnel");
-        let (sink, mut stream) = dev.into_framed().split();
+        let (tun_sink, mut tun_stream) = dev.into_framed().split();
 
         let ip_pool_arc = Arc::new(Mutex::new(LookupPool::new(ip_iter)));
         let loop_ip_pool_arc = ip_pool_arc.clone();
 
         task::spawn(async move {
-            while let Some(packet) = stream.next().await {
+            while let Some(packet) = tun_stream.next().await {
                 match packet {
                     Ok(pkt) => {
                         let result = Self::handle_packet(&mut remote, loop_ip_pool_arc.clone(), &pkt).await;
@@ -80,12 +80,12 @@ impl Server {
         });
 
         Self {
-            remote_receiver,
+            id_length: server_config.id_length,
             topic: server_config.topic,
             local_addr,
-            id_length: server_config.id_length,
             ip_pool: ip_pool_arc,
-            sink,
+            remote_recv,
+            tun_sink,
         }
     }
 
@@ -137,15 +137,13 @@ impl Server {
                 cursor.into_inner()
             }
         };
-        self.sink
-            .send(TunPacket::new(packet_with_updated_header))
-            .await?;
+        self.tun_sink.send(TunPacket::new(packet_with_updated_header)).await?;
         Ok(())
     }
 
     pub async fn run(&mut self) {
         loop {
-            if let Some((_topic, id_message)) = self.remote_receiver.recv().await {
+            if let Some((_topic, id_message)) = self.remote_recv.recv().await {
                 let (id, message) = id_message.split_at(self.id_length);
                 if let Err(err) = self.handle_remote_message(id, message).await {
                     log::error!("handle_remote_message error {:?}", err);
