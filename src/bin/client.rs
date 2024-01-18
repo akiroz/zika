@@ -10,6 +10,5 @@ async fn main() {
         .init();
     let config = read_from_default_location().expect("A proper config file");
     log::debug!("Config = {:?}", config);
-    let mut client = Client::from_config(config).await;
-    client.run().await;
+    let _ = Client::from_config(config).await;
 }
