@@ -31,7 +31,7 @@ pub struct Server {
 
 impl Server {
     pub fn from_config(config: config::Config) -> Self {
-        let mqtt_options = config.broker_mqtt_options();
+        let mqtt_options = config.mqtt.to_mqtt_options().expect("valid mqtt config");
         let server_config = config.server.expect("non-null server config");
         Self::new(mqtt_options, server_config)
     }

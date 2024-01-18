@@ -39,7 +39,7 @@ struct Tunnel {
 
 impl Client {
     pub async fn from_config(config: config::Config) -> Self {
-        let mqtt_options = config.broker_mqtt_options();
+        let mqtt_options = config.mqtt.to_mqtt_options().expect("valid mqtt config");
         let client_config = config.client.expect("non-null client config");
         Self::new(mqtt_options, client_config).await
     }

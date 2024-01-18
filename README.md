@@ -18,13 +18,9 @@ it's possible capture/inject arbitrary IP packets to/from the target device if t
 
 ### Configuration
 
-See [zika_config.sample.json](zika_config.sample.json)
+See [zika_config.example.toml](zika_config.example.toml)
 
 ### Building
-
-Dependencies:
-- cargo
-- ...
 
 ```
 $ cargo build
