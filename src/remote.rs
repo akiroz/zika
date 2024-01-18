@@ -86,7 +86,7 @@ impl Remote {
         match pkt {
             Packet::ConnAck(ConnAck { code: Success, session_present, .. }) => {
                 if !session_present {
-                    log::info!("broker[{}] !session_present", context.nth);
+                    log::info!("broker[{}] new session", context.nth);
                     let subs_v = context.subs.lock().await;
                     let subs = subs_v.iter().map(|path| Filter {
                         path: path.clone(),

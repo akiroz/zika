@@ -15,8 +15,8 @@ use tokio_util::codec::Framed;
 use tun::{AsyncDevice, TunPacket, TunPacketCodec};
 
 use crate::config;
-use crate::ip_iter::SizedIpv4NetworkIterator;
 use crate::remote;
+use crate::ip_iter::SizedIpv4NetworkIterator;
 
 type TunSink = SplitSink<Framed<AsyncDevice, TunPacketCodec>, TunPacket>;
 
