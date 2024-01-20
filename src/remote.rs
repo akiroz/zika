@@ -1,12 +1,11 @@
-use bytes::Bytes;
 use log;
+use bytes::Bytes;
 use rumqttc::v5::{
     self as mqtt,
     mqttbytes::{v5::Packet, QoS},
 };
 use std::sync::Arc;
-use tokio::sync::Mutex;
-use tokio::{sync::mpsc, task};
+use tokio::{sync::{mpsc, Mutex}, task};
 
 use crate::lookup_pool::LookupPool;
 use rumqttc::v5::mqttbytes::v5::PublishProperties;

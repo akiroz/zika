@@ -24,7 +24,7 @@ pub struct Client {
     pub local_addr: Ipv4Addr,
     tunnels: Arc<Vec<Tunnel>>,
     pub remote: Arc<Mutex<remote::Remote>>, // Allow external mqtt ops
-    pub remote_passthru_recv: broadcast::Receiver<(String, Bytes)>,
+    pub remote_passthru_recv: Arc<Mutex<broadcast::Receiver<(String, Bytes)>>>,
 }
 
 struct Tunnel {
@@ -100,7 +100,7 @@ impl Client {
             local_addr,
             tunnels: Arc::new(tunnels),
             remote: Arc::new(Mutex::new(remote)),
-            remote_passthru_recv,
+            remote_passthru_recv: Arc::new(Mutex::new(remote_passthru_recv)),
         });
 
         let loop_client = client.clone();
