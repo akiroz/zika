@@ -162,7 +162,8 @@ impl Client {
                 return;
             }
         }
-        log::warn!("drop packet: unknown addr {:?}", &dest);
+        // Stray packets sent to interface
+        log::debug!("drop packet: unknown addr {:?}", &dest);
     }
 
     // mqtt -> tun

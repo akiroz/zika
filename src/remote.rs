@@ -1,15 +1,16 @@
+use core::time::Duration;
+use std::sync::Arc;
+use std::ops::Range;
+
 use log;
 use bytes::Bytes;
+use tokio::{sync::{mpsc, Mutex}, task};
 use rumqttc::v5::{
     self as mqtt,
-    mqttbytes::{v5::Packet, QoS},
+    mqttbytes::{v5::Packet, QoS, v5::PublishProperties},
 };
-use std::sync::Arc;
-use tokio::{sync::{mpsc, Mutex}, task};
 
 use crate::lookup_pool::LookupPool;
-use rumqttc::v5::mqttbytes::v5::PublishProperties;
-use std::ops::Range;
 
 // Context for receiving messsage from remote
 struct RemoteIncomingContext {
@@ -68,8 +69,13 @@ impl Remote {
                             log::trace!("broker[{}] recv {:?}", idx, pkt);
                             Self::handle_packet(&mut context, pkt).await;
                         }
-                        x => {
-                            log::trace!("broker[{}] recv {:?}", idx, x);
+                        Err(err) => {
+                            log::warn!("broker[{}] recv {:?}", idx, err);
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                            continue;
+                        }
+                        Ok(msg) => { // Other messages
+                            log::trace!("broker[{}] recv {:?}", idx, msg);
                             continue;
                         }
                     };
