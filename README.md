@@ -1,3 +1,7 @@
+[![Crates.io](https://img.shields.io/crates/v/zika.svg)](https://crates.io/crates/zika)
+[![docs.rs](https://docs.rs/zika/badge.svg)](https://docs.rs/zika)
+[![Build Status Github](https://github.com/akiroz/zika/actions/workflows/ci.yaml/badge.svg?branch=master)](https://github.com/akiroz/zika/actions/workflows/ci.yaml)
+
 # Zika
 
 IP Tunneling over MQTT
