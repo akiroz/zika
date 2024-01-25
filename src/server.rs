@@ -1,4 +1,4 @@
-use std::io::{Cursor, Write};
+use std::error::Error as StdError;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
@@ -11,6 +11,7 @@ use tokio::{task, sync::Mutex};
 use tokio_util::codec::Framed;
 use tun::{AsyncDevice, TunPacket, TunPacketCodec};
 
+use crate::nat;
 use crate::config;
 use crate::remote;
 use crate::ip_iter::SizedIpv4NetworkIterator;
@@ -117,7 +118,7 @@ impl Server {
     }
 
     // mqtt -> tun
-    async fn handle_remote_message(&self, tun_sink: &mut TunSink, id: &[u8], msg: &[u8]) -> Result<(), etherparse::WriteError> {
+    async fn handle_remote_message(&self, tun_sink: &mut TunSink, id: &[u8], msg: &[u8]) -> Result<(), Box<dyn StdError>> {
         let base64_id = general_purpose::URL_SAFE_NO_PAD.encode(id);
         let topic_base = &self.topic;
         let topic = format!("{topic_base}/{base64_id}");
@@ -126,20 +127,7 @@ impl Server {
             let ip = ip_pool.get_forward(&topic).into();
             ip
         };
-        let pkt = match Ipv4Header::from_slice(msg) {
-            Err(error) => {
-                log::debug!("packet parse failed {:?}", error);
-                msg.to_vec()
-            }
-            Ok((mut ipv4_header, rest)) => {
-                ipv4_header.source = ip.octets();
-                ipv4_header.destination = self.local_addr.octets();
-                let mut cursor = Cursor::new(Vec::new());
-                ipv4_header.write(&mut cursor)?;
-                cursor.write_all(rest)?;
-                cursor.into_inner()
-            }
-        };
+        let pkt = nat::do_nat(msg, ip, self.local_addr)?;
         tun_sink.send(TunPacket::new(pkt)).await?;
         Ok(())
     }

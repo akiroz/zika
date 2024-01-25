@@ -1,4 +1,4 @@
-use std::io::{Cursor, Write};
+use std::error::Error as StdError;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
@@ -8,15 +8,16 @@ use futures::{SinkExt, stream::{SplitSink, StreamExt}};
 use rand::{thread_rng, Rng, distributions::Standard};
 
 use rumqttc;
-use etherparse::Ipv4Header;
 use ipnetwork::Ipv4Network;
 use tokio::{task, sync::{broadcast, Mutex}};
 use tokio_util::codec::Framed;
 use tun::{AsyncDevice, TunPacket, TunPacketCodec};
 
+use crate::nat;
 use crate::config;
 use crate::remote;
 use crate::ip_iter::SizedIpv4NetworkIterator;
+
 
 type TunSink = SplitSink<Framed<AsyncDevice, TunPacketCodec>, TunPacket>;
 
@@ -165,25 +166,14 @@ impl Client {
     }
 
     // mqtt -> tun
-    async fn handle_remote_message(&self, tun_sink: &mut TunSink, topic: &str, msg: &[u8]) -> Result<bool, etherparse::WriteError> {
+    async fn handle_remote_message(&self, tun_sink: &mut TunSink, topic: &str, msg: &[u8]) -> Result<bool, Box<dyn StdError>> {
         if let Some(tunnel) = self.tunnels.iter().find(|&t| t.topic == topic) {
-            match Ipv4Header::from_slice(&msg) {
-                Err(error) => {
-                    log::debug!("packet parse failed {:?}", error);
-                    Ok(false)
-                }
-                Ok((mut ipv4_header, rest)) => {
-                    ipv4_header.source = tunnel.bind_addr.octets();
-                    ipv4_header.destination = self.local_addr.octets();
-                    let mut cursor = Cursor::new(Vec::new());
-                    ipv4_header.write(&mut cursor)?;
-                    cursor.write_all(rest)?;
-                    tun_sink.send(TunPacket::new(cursor.into_inner())).await?;
-                    Ok(true)
-                }
-            }
+            let pkt = nat::do_nat(msg, tunnel.bind_addr, self.local_addr)?;
+            tun_sink.send(TunPacket::new(pkt)).await?;
+            Ok(true)
         } else {
             Ok(false)
         }
     }
+
 }
