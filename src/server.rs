@@ -120,13 +120,13 @@ impl Server {
     // mqtt -> tun
     async fn handle_remote_message(&self, tun_sink: &mut TunSink, id: &[u8], msg: &[u8]) -> Result<(), Box<dyn StdError>> {
         let base64_id = general_purpose::URL_SAFE_NO_PAD.encode(id);
-        let topic_base = &self.topic;
-        let topic = format!("{topic_base}/{base64_id}");
-        let ip: Ipv4Addr = {
+        let (existing_tunnel, ip) = {
             let mut ip_pool = self.ip_pool.lock().await;
-            let ip = ip_pool.get_forward(&topic).into();
-            ip
+            ip_pool.get_forward(&base64_id)
         };
+        if !existing_tunnel {
+            log::info!("alloc tunnel {} (IP {})", base64_id, ip);
+        }
         let pkt = nat::do_nat(msg, ip, self.local_addr)?;
         tun_sink.send(TunPacket::new(pkt)).await?;
         Ok(())

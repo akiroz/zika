@@ -28,9 +28,9 @@ where
         }
     }
 
-    pub fn get_forward(&mut self, a: &A) -> B {
+    pub fn get_forward(&mut self, a: &A) -> (bool, B) {
         match self.forward.get(a) {
-            Some(b) => *b,
+            Some(b) => (true, *b),
             None => {
                 let b = self
                     .pool
@@ -48,7 +48,7 @@ where
                     }
                 }
                 self.reverse.insert(b, a.clone());
-                b
+                (false, b)
             }
         }
     }

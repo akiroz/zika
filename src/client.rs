@@ -18,7 +18,6 @@ use crate::config;
 use crate::remote;
 use crate::ip_iter::SizedIpv4NetworkIterator;
 
-
 type TunSink = SplitSink<Framed<AsyncDevice, TunPacketCodec>, TunPacket>;
 
 pub struct Client {
@@ -81,7 +80,7 @@ impl Client {
             if !ip_network.contains(bind_addr) {
                 panic!("tunnel bind_addr outside subnet");
             }
-            log::info!("bind {:?} -> {:?}", &bind_addr, &topic);
+            log::info!("bind {:?} -> {} ({})", &bind_addr, topic_base, base64_id);
 
             let subscribe_result = remote.subscribe(topic.clone()).await;
             if let Err(err) = subscribe_result {

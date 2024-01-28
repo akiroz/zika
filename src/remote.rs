@@ -156,7 +156,7 @@ impl Remote {
             let mut properties: PublishProperties = Default::default();
             let topic_to_send = if let Some(ref mut pool) = client.alias_pool {
                 let already_sent_alias = pool.contains(topic);
-                let alias = pool.get_forward(topic);
+                let (_exists, alias) = pool.get_forward(topic);
                 properties.topic_alias = Some(alias);
                 if already_sent_alias { "" } else { topic }
             } else { // Alias not used
