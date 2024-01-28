@@ -43,6 +43,7 @@ impl Remote {
             subs: subs.clone(),
         };
         for (idx, opt) in broker_opts.iter().enumerate() {
+            log::debug!("broker[{}] opts {:?}", idx, opt);
             let (mqtt_client, mut event_loop) = mqtt::AsyncClient::new(opt.clone(), 128);
             let arc_mqtt_client = Arc::new(mqtt_client);
 
