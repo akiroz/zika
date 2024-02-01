@@ -1,5 +1,5 @@
 use core::time::Duration;
-use std::error::Error;
+use std::error::Error as StdError;
 use std::fs::{read_to_string, File};
 use std::io::{self, BufReader, ErrorKind};
 use std::net::Ipv4Addr;
@@ -75,7 +75,7 @@ pub fn read_from_default_location() -> Result<Config, ConfigError> {
 
 
 impl MqttConfig {
-    pub fn to_mqtt_options(&self) -> Result<Vec<rumqttc::v5::MqttOptions>, Box<dyn Error>> {
+    pub fn to_mqtt_options(&self) -> Result<Vec<rumqttc::v5::MqttOptions>, Box<dyn StdError>> {
         let mut rng = thread_rng();
         let mut mqtt_options: Vec<rumqttc::v5::MqttOptions> = Vec::new();
         for broker_cfg in self.brokers.clone().into_iter() {
