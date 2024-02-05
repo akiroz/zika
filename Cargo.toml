@@ -1,6 +1,6 @@
 [package]
 name = "zika"
-version = "3.4.2"
+version = "3.4.3"
 license = "MIT"
 description = "IP Tunneling over MQTT"
 repository = "https://github.com/akiroz/zika"
@@ -26,7 +26,7 @@ lru = "0.12.0"
 rand = "0.8.5"
 rustls = "0.21.10"
 rustls-pemfile = "2.0.0"
-rumqttc = { version = "0.23.0", features = ["use-native-tls"] }
+rumqttc = { version = "0.23.0", features = ["use-rustls"] }
 toml = "0.8.8"
 serde = { version = "1.0.193", features = ["derive"] }
 serde_default_utils = "0.2.1"
