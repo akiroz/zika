@@ -104,7 +104,7 @@ impl Remote {
         let mut chkr_recv = remote.on_event.resubscribe();
         let chkr_online = remote.online.clone();
         task::spawn(async move {
-            let mut broker_state: Vec<bool> = Vec::with_capacity(broker_len);
+            let mut broker_state: Vec<bool> = (0..broker_len).map(|_| false).collect();
             loop {
                 match chkr_recv.recv().await {
                     Ok((idx, Packet::ConnAck(_))) => broker_state[idx] = true,
