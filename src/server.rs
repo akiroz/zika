@@ -25,6 +25,7 @@ pub struct Server {
     pub topic: String,
     pub local_addr: Ipv4Addr,
     ip_pool: Arc<Mutex<IpPool>>,
+    pub remote: Arc<Mutex<remote::Remote>>, // Allow external mqtt access
 }
 
 impl Server {
@@ -42,7 +43,7 @@ impl Server {
         let mut ip_iter = SizedIpv4NetworkIterator::new(ip_network);
         let local_addr = ip_iter.next().expect("subnet size > 1");
 
-        let (mut remote, mut remote_recv) = remote::Remote::new(&mqtt_options, vec![server_config.topic.clone()]);
+        let (remote, mut remote_recv) = remote::Remote::new(&mqtt_options, vec![server_config.topic.clone()]);
 
         log::info!("bind {:?}/{}", local_addr, ip_network.prefix());
 
@@ -66,14 +67,17 @@ impl Server {
             topic: server_config.topic,
             local_addr,
             ip_pool: Arc::new(Mutex::new(LookupPool::new(ip_iter))),
+            remote: Arc::new(Mutex::new(remote)),
         });
 
         let loop_ip_pool = server.ip_pool.clone();
+        let loop_remote = server.remote.clone();
         task::spawn(async move {
             while let Some(packet) = tun_stream.next().await {
                 match packet {
                     Ok(pkt) => {
                         let mut ip_pool = loop_ip_pool.lock().await;
+                        let mut remote = loop_remote.lock().await;
                         let result = Self::handle_packet(&mut remote, &mut ip_pool, &pkt).await;
                         if let Err(err) = result {
                             log::error!("handle_packet error {:?}", err);
@@ -87,14 +91,15 @@ impl Server {
         let loop_server = server.clone();
         task::spawn(async move {
             loop {
-                if let Some((_topic, payload)) = remote_recv.recv().await {
-                    let (id, msg) = payload.split_at(server_config.id_length);
-                    let handle_result = loop_server.handle_remote_message(&mut tun_sink, id, msg).await;
-                    if let Err(err) = handle_result {
-                        log::error!("handle_remote_message error {:?}", err);
+                match remote_recv.recv().await {
+                    None => panic!("remote_recv: None"),
+                    Some((_topic, msg)) => {
+                        let (id, pkt) = msg.split_at(server_config.id_length);
+                        let handle_result = loop_server.handle_remote_message(&mut tun_sink, id, pkt).await;
+                        if let Err(err) = handle_result {
+                            log::error!("handle_remote_message error {:?}", err);
+                        }
                     }
-                } else {
-                    break;
                 }
             }
         });
@@ -118,7 +123,7 @@ impl Server {
     }
 
     // mqtt -> tun
-    async fn handle_remote_message(&self, tun_sink: &mut TunSink, id: &[u8], msg: &[u8]) -> Result<(), Box<dyn StdError>> {
+    async fn handle_remote_message(&self, tun_sink: &mut TunSink, id: &[u8], pkt: &[u8]) -> Result<(), Box<dyn StdError>> {
         let base64_id = general_purpose::URL_SAFE_NO_PAD.encode(id);
         let (existing_tunnel, ip) = {
             let mut ip_pool = self.ip_pool.lock().await;
@@ -127,8 +132,8 @@ impl Server {
         if !existing_tunnel {
             log::info!("alloc tunnel {} (IP {})", base64_id, ip);
         }
-        let pkt = nat::do_nat(msg, ip, self.local_addr)?;
-        tun_sink.send(TunPacket::new(pkt)).await?;
+        let nat_pkt = nat::do_nat(pkt, ip, self.local_addr)?;
+        tun_sink.send(TunPacket::new(nat_pkt)).await?;
         Ok(())
     }
 }

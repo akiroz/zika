@@ -4,10 +4,10 @@ use std::ops::Range;
 
 use log;
 use bytes::Bytes;
-use tokio::{sync::{mpsc, Mutex}, task};
+use tokio::{sync::{mpsc, broadcast, Mutex}, task};
 use rumqttc::v5::{
     self as mqtt,
-    mqttbytes::{v5::Packet, QoS, v5::PublishProperties},
+    mqttbytes::{v5::{Packet, PublishProperties}, QoS},
 };
 
 use crate::lookup_pool::LookupPool;
@@ -16,8 +16,9 @@ use crate::lookup_pool::LookupPool;
 struct RemoteIncomingContext {
     nth: usize,
     mqtt_client: Arc<mqtt::AsyncClient>,
-    sender: mpsc::Sender<(String, Bytes)>,
     subs: Arc<Mutex<Vec<String>>>,
+    msg_send: mpsc::Sender<(String, Bytes)>,
+    evt_send: broadcast::Sender<(usize, Packet)>,
 }
 
 struct RemoteClient {
@@ -29,18 +30,21 @@ struct RemoteClient {
 pub struct Remote {
     clients: Vec<RemoteClient>,
     subs: Arc<Mutex<Vec<String>>>,
+    pub on_event: broadcast::Receiver<(usize, Packet)>,
 }
 
 impl Remote {
-    pub fn new(
-        broker_opts: &Vec<mqtt::MqttOptions>,
-        topics: Vec<String>,
-    ) -> (Self, mpsc::Receiver<(String, Bytes)>) {
-        let (sender, receiver) = mpsc::channel(128);
+    pub fn new(broker_opts: &Vec<mqtt::MqttOptions>, topics: Vec<String>) -> (
+        Self,
+        mpsc::Receiver<(String, Bytes)>,
+    ) {
+        let (msg_send, msg_recv) = mpsc::channel(64);
+        let (evt_send, evt_recv) = broadcast::channel(1);
         let subs = Arc::new(Mutex::new(topics));
         let mut remote = Self {
             clients: Vec::with_capacity(broker_opts.len()),
             subs: subs.clone(),
+            on_event: evt_recv,
         };
         for (idx, opt) in broker_opts.iter().enumerate() {
             log::debug!("broker[{}] opts {:?}", idx, opt);
@@ -59,16 +63,23 @@ impl Remote {
             let mut context = RemoteIncomingContext {
                 nth: idx,
                 mqtt_client: arc_mqtt_client,
-                sender: sender.clone(),
                 subs: subs.clone(),
+                msg_send: msg_send.clone(),
+                evt_send: evt_send.clone(),
+                
             };
             task::spawn(async move {
                 loop {
+                    let evt = event_loop.poll().await;
                     use mqtt::Event::Incoming;
-                    match event_loop.poll().await {
+                    match evt {
                         Ok(Incoming(pkt)) => {
                             log::trace!("broker[{}] recv {:?}", idx, pkt);
-                            Self::handle_packet(&mut context, pkt).await;
+                            Self::handle_packet(&mut context, pkt.clone()).await;
+                            context.evt_send.send((idx, pkt)).unwrap_or_else(|err| {
+                                log::warn!("broker[{}] evt_send {:?}", idx, err);
+                                0
+                            });
                         }
                         Err(err) => {
                             log::warn!("broker[{}] recv {:?}", idx, err);
@@ -84,7 +95,7 @@ impl Remote {
             });
             remote.clients.push(remote_client);
         }
-        (remote, receiver)
+        (remote, msg_recv)
     }
 
     async fn handle_packet(context: &mut RemoteIncomingContext, pkt: Packet) {
@@ -114,7 +125,9 @@ impl Remote {
                     .ok()
                     .filter(|n| n.len() > 0);
                 if let Some(topic) = topic_str {
-                    _ = context.sender.send((topic, payload)).await; // What if it's not ok?
+                    context.msg_send.send((topic, payload)).await.unwrap_or_else(|err| {
+                        log::warn!("broker[{}] msg_send {:?}", context.nth, err);
+                    });
                 } else {
                     log::debug!("drop packet, non utf8 topic: {:?}", topic);
                 }

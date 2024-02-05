@@ -2,14 +2,13 @@ use std::error::Error as StdError;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
-use bytes::Bytes;
 use base64::{engine::general_purpose, Engine as _};
 use futures::{SinkExt, stream::{SplitSink, StreamExt}};
 use rand::{thread_rng, Rng, distributions::Standard};
 
 use rumqttc;
 use ipnetwork::Ipv4Network;
-use tokio::{task, sync::{broadcast, Mutex}};
+use tokio::{task, sync::Mutex};
 use tokio_util::codec::Framed;
 use tun::{AsyncDevice, TunPacket, TunPacketCodec};
 
@@ -23,8 +22,7 @@ type TunSink = SplitSink<Framed<AsyncDevice, TunPacketCodec>, TunPacket>;
 pub struct Client {
     pub local_addr: Ipv4Addr,
     tunnels: Arc<Vec<Tunnel>>,
-    pub remote: Arc<Mutex<remote::Remote>>, // Allow external mqtt ops
-    pub remote_passthru_recv: Arc<Mutex<broadcast::Receiver<(String, Bytes)>>>,
+    pub remote: Arc<Mutex<remote::Remote>>, // Allow external mqtt access
 }
 
 struct Tunnel {
@@ -95,12 +93,10 @@ impl Client {
             });
         }
 
-        let (remote_passthru_send, remote_passthru_recv) = broadcast::channel(1);
         let client = Arc::new(Self {
             local_addr,
             tunnels: Arc::new(tunnels),
             remote: Arc::new(Mutex::new(remote)),
-            remote_passthru_recv: Arc::new(Mutex::new(remote_passthru_recv)),
         });
 
         let loop_client = client.clone();
@@ -120,20 +116,13 @@ impl Client {
         let loop2_client = client.clone();
         task::spawn(async move {
             loop {
-                if let Some((topic, msg)) = remote_recv.recv().await {
-                    let handle_result = loop2_client.handle_remote_message(&mut tun_sink, topic.as_str(), &msg).await;
-                    match handle_result {
-                        Err(err) => log::error!("handle_remote_message error {:?}", err),
-                        Ok(handled) => {
-                            if !handled {
-                                if let Err(err) = remote_passthru_send.send((topic, msg)) {
-                                    log::warn!("remote_passthru_send error {:?}", err);
-                                }
-                            }
+                match remote_recv.recv().await {
+                    None => panic!("remote_recv: None"),
+                    Some((topic, msg)) => {
+                        if let Err(err) = loop2_client.handle_remote_message(&mut tun_sink, topic.as_str(), &msg).await {
+                            log::error!("handle_remote_message {:?}", err);
                         }
                     }
-                } else {
-                    break;
                 }
             }
         });
@@ -166,14 +155,12 @@ impl Client {
     }
 
     // mqtt -> tun
-    async fn handle_remote_message(&self, tun_sink: &mut TunSink, topic: &str, msg: &[u8]) -> Result<bool, Box<dyn StdError>> {
+    async fn handle_remote_message(&self, tun_sink: &mut TunSink, topic: &str, msg: &[u8]) -> Result<(), Box<dyn StdError>> {
         if let Some(tunnel) = self.tunnels.iter().find(|&t| t.topic == topic) {
             let pkt = nat::do_nat(msg, tunnel.bind_addr, self.local_addr)?;
             tun_sink.send(TunPacket::new(pkt)).await?;
-            Ok(true)
-        } else {
-            Ok(false)
         }
+        Ok(())
     }
 
 }
