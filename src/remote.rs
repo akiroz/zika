@@ -1,5 +1,5 @@
 use core::time::Duration;
-use std::sync::Arc;
+use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
 use std::ops::Range;
 
 use log;
@@ -31,6 +31,7 @@ pub struct Remote {
     clients: Vec<RemoteClient>,
     subs: Arc<Mutex<Vec<String>>>,
     pub on_event: broadcast::Receiver<(usize, Packet)>,
+    pub online: Arc<AtomicBool>,
 }
 
 impl Remote {
@@ -45,7 +46,9 @@ impl Remote {
             clients: Vec::with_capacity(broker_opts.len()),
             subs: subs.clone(),
             on_event: evt_recv,
+            online: Arc::new(AtomicBool::new(false)),
         };
+
         for (idx, opt) in broker_opts.iter().enumerate() {
             log::debug!("broker[{}] opts {:?}", idx, opt);
             let (mqtt_client, mut event_loop) = mqtt::AsyncClient::new(opt.clone(), 128);
@@ -95,6 +98,23 @@ impl Remote {
             });
             remote.clients.push(remote_client);
         }
+
+        // Online checker
+        let broker_len = remote.clients.len();
+        let mut chkr_recv = remote.on_event.resubscribe();
+        let chkr_online = remote.online.clone();
+        task::spawn(async move {
+            let mut broker_state: Vec<bool> = Vec::with_capacity(broker_len);
+            loop {
+                match chkr_recv.recv().await {
+                    Ok((idx, Packet::ConnAck(_))) => broker_state[idx] = true,
+                    Ok((idx, Packet::Disconnect(_))) => broker_state[idx] = false,
+                    _ => {}
+                }
+                chkr_online.store(broker_state.iter().any(|up| *up), Ordering::Relaxed);
+            }
+        });
+
         (remote, msg_recv)
     }
 
